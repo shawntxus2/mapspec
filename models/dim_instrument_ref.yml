@@ -1,0 +1,205 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+  timestamp_policy:
+    storage: utc_instant
+    retain_source_zone: true
+    zone_representation: iana_zone_id
+    tzdata_version: "2026a"
+    ambiguous_local: error
+    nonexistent_local: error
+
+hash_policy:
+  algorithm: sha256
+  storage: hex
+  hex_case: lower
+  strip_prefix: true
+  framing: length_prefix
+  null_sentinel: "\u0000NULL"
+  empty_sentinel: "\u0000EMPTY"
+  numeric: cast_to_declared_scale
+  timestamp_format: "YYYY-MM-DD HH24:MI:SS.FF3"
+  trim_text: true
+  column_order: declared
+
+target:
+  layer: dimension
+  name: dim_instrument_ref
+  schema: mart
+  description: >
+    The hard case. One document per instrument, carrying several independent histories:
+    a nested rating array, a nested sector array with its own start and end dates, and a
+    denormalized repeating group of status code and status date columns off the mainframe
+    extract.
+
+    Exploding those independently would produce a cartesian product that looks plausible
+    and is wrong. The generator unions the distinct change instants across every timeline
+    to get the entity's change points, as-of joins each timeline back to that set, then
+    closes the versions with a window function over the merged points.
+
+    before_first is required on every timeline and deliberately has no default. An entity
+    known from 2019 whose rating history starts in 2022 has three years where the answer is
+    a decision, not a lookup.
+  grain: [instrument_durable_key, valid_from]
+  natural_key: [source_system, instrument_id]
+  natural_key_stability: stable
+  materialization: merge
+
+durable_key:
+  name: instrument_durable_key
+  strategy: sequence
+  type: int
+  cardinality:
+    entities: 500000
+  on_unknown: assign_new
+
+scd:
+  type: 2
+  derivation: attribute_timelines
+  surrogate_key:
+    name: instrument_key
+    strategy: sequence
+    cardinality:
+      entities: 500000
+      avg_versions: 30
+    type: int
+  effective_from: valid_from
+  effective_to: valid_to
+  bound: "[from, to)"
+  open_sentinel: "9999-12-31 00:00:00.000"
+  source_timestamp_promotion: start_of_day
+  on_duplicate_instant: error
+  current_flag: is_current
+  version_number: version_no
+  change_hash: record_hash
+  attribute_hash: attribute_hash
+  current_view:
+    generate: true
+    name: dim_instrument_ref_current
+  audit:
+    loaded_at: dw_load_ts
+    source_system: dw_source_system
+    tzdata_version: dw_tzdata_version
+  stable_columns: [instrument_name, issuer_id]
+  timelines:
+    - attribute: credit_rating
+      source: ref
+      from: { explode: "$.ratingHistory[*]" }
+      effective_from: "$.effectiveDate"
+      value: "$.ratingCode"
+      before_first: unknown
+      on_duplicate_instant: error
+
+    - attribute: sector_code
+      source: ref
+      from: { explode: "$.sectorHistory[*]" }
+      effective_from: "$.fromDate"
+      effective_to: "$.toDate"
+      value: "$.sectorCode"
+      before_first: unknown
+
+    - attribute: listing_status
+      source: mfstat
+      from:
+        unpivot:
+          - { value: "mfstat.status_code_1", effective_from: "mfstat.status_date_1" }
+          - { value: "mfstat.status_code_2", effective_from: "mfstat.status_date_2" }
+          - { value: "mfstat.status_code_3", effective_from: "mfstat.status_date_3" }
+      effective_from: "effective_from"
+      value: "value"
+      before_first: unknown
+
+late_arrival:
+  mode: retroactive_insert
+  affected_facts: report
+  dedupe_on_change_hash: true
+  max_backdating: P10Y
+
+sources:
+  - alias: ref
+    kind: json
+    system: vendor_ref
+    transport: s3
+    serialization: json
+    uri: "s3://raw/instruments/*.json"
+    source_zone: "UTC"
+    landing: native_read
+    root: "$.instruments[*]"
+    projection:
+      - { name: instrument_id,   path: "$.instrumentId",    type: varchar(20) }
+      - { name: instrument_name, path: "$.name",            type: varchar(200) }
+      - { name: issuer_id,       path: "$.issuer.id",       type: varchar(20) }
+      - { name: notional_txt,    path: "$.notional.amount", type: varchar(40), as_text: true }
+
+  - alias: mfstat
+    kind: table
+    system: mainframe
+    platform: db2_zos
+    schema: legacy
+    table: instrument_status
+    source_zone: "America/New_York"
+    join:
+      type: left
+      condition: "ref.instrument_id = mfstat.instr_id"
+
+columns:
+  - name: source_system
+    type: varchar(20)
+    nullable: false
+    role: natural_key
+    scd_behavior: { type: 1 }
+    description: The instrument's identity comes from the vendor reference feed; the mainframe only enriches status.
+    transform:
+      kind: constant
+      value: vendor_ref
+
+  - name: instrument_id
+    type: varchar(20)
+    nullable: false
+    role: natural_key
+    scd_behavior: { type: 1 }
+    transform:
+      kind: direct
+      source: "ref.instrument_id"
+
+  - name: instrument_name
+    type: varchar(200)
+    scd_behavior: { type: 1 }
+    description: Declared stable. No history of its own, so it does not open a version.
+    transform:
+      kind: direct
+      source: "ref.instrument_name"
+
+  - name: issuer_id
+    type: varchar(20)
+    scd_behavior: { type: 1 }
+    transform:
+      kind: direct
+      source: "ref.issuer_id"
+
+  - name: notional_amount
+    type: numeric(28,8)
+    scd_behavior: { type: 2 }
+    description: >
+      Twenty-eight significant digits cannot cross a JSON hop as a number. An IEEE 754
+      double carries about fifteen reliably, so the projection declares as_text and the
+      conversion is done here where the validator can see it.
+    transform:
+      kind: cast
+      source: "ref.notional_txt"
+      to: numeric(28,8)
+      rounding: half_even
+      on_error: error
+
+  - name: delisting_reason
+    type: varchar(60)
+    scd_behavior: { type: 2 }
+    transform:
+      kind: unresolved
+      note: >
+        The mainframe extract carries a status change date and a changed flag, but the
+        reason text lives somewhere else entirely. Knowing when it changed without knowing
+        what it changed to is not a mapping. Needs the reason source identified.
+      raised_by: "import:mainframe_sheet_row_77"
+      owner: "reference data steward"

@@ -1,0 +1,23 @@
+version: 2
+models:
+- name: dim_party
+  description: A party, keyed on the pair (source_system, party_id). Two systems, alpha and beta, each
+    issue party id P1 to a different party. The source carries source_system as a column, so both P1 rows
+    coexist and a lookup that joins on party_id alone would match both. This is the fixture for the cross-system
+    join hole.
+  columns:
+  - name: source_system
+    tests:
+    - not_null:
+        config:
+          where: party_key >= 0
+  - name: party_id
+    tests:
+    - not_null:
+        config:
+          where: party_key >= 0
+  tests:
+  - dbt_utils.unique_combination_of_columns:
+      combination_of_columns:
+      - party_durable_key
+      - valid_from

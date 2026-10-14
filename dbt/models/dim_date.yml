@@ -1,0 +1,10 @@
+version: 2
+models:
+- name: dim_date
+  description: Conformed calendar dimension. Geography free on purpose. Holiday and business-day flags
+    live in dim_calendar_date because they differ by country and by exchange, and a single is_holiday
+    column would be wrong for most of a global estate.
+  tests:
+  - dbt_utils.unique_combination_of_columns:
+      combination_of_columns:
+      - date_key

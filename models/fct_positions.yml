@@ -1,0 +1,209 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+  timestamp_policy:
+    storage: utc_instant
+    retain_source_zone: true
+    zone_representation: iana_zone_id
+    tzdata_version: "2026a"
+    business_date:
+      mode: stored
+      calendar_zone: "America/New_York"
+      cutover: "00:00"
+    ambiguous_local: error
+    nonexistent_local: error
+
+target:
+  layer: fact
+  name: fct_positions
+  schema: mart
+  description: >
+    Every Type-2 lookup in this model resolves against one point in time, declared once
+    here rather than restated on each lookup. That is how the estate stays consistent:
+    a fact cannot accidentally join one dimension as of the position date and another
+    as of now.
+
+    as_of_promotion is a business decision, not a technical one. end_of_day gives the
+    dimension version in force when the position was struck. start_of_day gives the one
+    in force when the day opened. Both are defensible and they produce different numbers,
+    so the choice is declared where a reviewer will see it.
+  grain: [position_date, account_id, security_id]
+  materialization: incremental
+  incremental_key: dw_load_ts
+  as_of: "pos.position_date"
+  as_of_promotion: end_of_day
+
+sources:
+  - alias: pos
+    kind: delimited
+    system: risk_pb
+    transport: sftp
+    serialization: delimited
+    uri: "s3://raw/positions/*.psv"
+    delimiter: "|"
+    header: true
+    encoding: utf-8
+    null_values: ["", "NULL"]
+    source_zone: "America/New_York"
+    landing: native_read
+    projection:
+      - { name: position_date_txt,  from: 1, type: varchar(10) }
+      - { name: account_id,         from: 2, type: varchar(20) }
+      - { name: security_id,        from: 3, type: varchar(12) }
+      - { name: customer_id,        from: 4, type: varchar(20) }
+      - { name: src_system,         from: 5, type: varchar(20) }
+      - { name: quantity_txt,       from: 6, type: varchar(30) }
+      - { name: market_value_txt,   from: 7, type: varchar(30) }
+      - { name: struck_at_txt,      from: 8, type: varchar(30) }
+      - { name: desk_zone,          from: 9, type: varchar(40) }
+
+filters:
+  - "pos.quantity_txt is not null"
+
+column_groups:
+  - group: temporal
+    description: >
+      Resolves the zone once at load and stores both key sets, so comparing 9am to 11am
+      local across Sydney, Hong Kong, London, New York and San Francisco is a filter on
+      local_time_key with no timezone conversion in the query. Doing it at query time
+      would put a function on a filter column and defeat pruning, and no fixed offset
+      arithmetic works because those five zones do not shift together.
+
+      utc_offset_minutes is carried because on the fall-back hour two different instants
+      share one local_time_key, and it is the only thing that separates them.
+
+      Durations are computed from the UTC instant. A duration derived from local keys is
+      wrong by an hour whenever it crosses a transition.
+    transform:
+      kind: temporal_keys
+      instant: "pos.struck_at_txt"
+      zone: "pos.desk_zone"
+      business_date:
+        zone: "pos.desk_zone"
+        cutover: "00:00"
+      emit:
+        - utc_date_key
+        - utc_time_key
+        - local_date_key
+        - local_time_key
+        - utc_offset_minutes
+        - business_date_key
+
+columns:
+  - name: position_date
+    type: date
+    nullable: false
+    role: degenerate
+    transform:
+      kind: cast
+      source: "pos.position_date_txt"
+      to: date
+      format: "YYYY-MM-DD"
+      on_error: error
+
+  - name: account_id
+    type: varchar(20)
+    nullable: false
+    role: degenerate
+    transform:
+      kind: direct
+      source: "pos.account_id"
+
+  - name: security_id
+    type: varchar(12)
+    nullable: false
+    role: degenerate
+    transform:
+      kind: direct
+      source: "pos.security_id"
+
+  - name: security_key
+    type: int
+    nullable: false
+    role: foreign_key
+    references: { model: dim_security, column: security_key }
+    transform:
+      kind: lookup
+      dimension: dim_security
+      natural_key: "pos.security_id"
+      source_system: "'vendor_ref'"
+      emit:
+        surrogate: security_key
+        durable: security_durable_key
+      on_miss: unknown
+      on_no_version: no_version_at_date
+
+  - name: customer_key
+    type: int
+    nullable: false
+    role: foreign_key
+    references: { model: dim_customer, column: customer_key }
+    description: >
+      Emits both keys. customer_key answers what we knew about her when the position was
+      struck. customer_durable_key answers how much this customer holds in total, across
+      every name and address she has had, and is the only correct basis for a distinct
+      customer count.
+
+      Carrying the durable key is also what makes a dimension rebuild survivable. A fact
+      holding only the surrogate cannot be re-resolved after history is restated.
+    transform:
+      kind: lookup
+      dimension: dim_customer
+      natural_key: "pos.customer_id"
+      source_system: "pos.src_system"
+      emit:
+        surrogate: customer_key
+        durable: customer_durable_key
+      on_miss: unknown
+      on_no_version: no_version_at_date
+
+  - name: quantity
+    type: numeric(18,4)
+    nullable: false
+    role: measure
+    additivity: additive
+    transform:
+      kind: cast
+      source: "pos.quantity_txt"
+      to: numeric(18,4)
+      rounding: half_up
+      on_error: error
+
+  - name: market_value
+    type: numeric(18,2)
+    nullable: false
+    role: measure
+    additivity: semi_additive
+    description: Semi additive. Sums across accounts and securities, never across position dates.
+    transform:
+      kind: cast
+      source: "pos.market_value_txt"
+      to: numeric(18,2)
+      rounding: half_up
+      on_error: error
+
+  - name: struck_at_utc
+    type: timestamp(3)
+    nullable: false
+    role: degenerate
+    description: The instant. Ordering and every duration measure derive from this, never from local keys.
+    transform:
+      kind: cast
+      source: "pos.struck_at_txt"
+      to: timestamp(3)
+      format: "YYYY-MM-DD HH24:MI:SS.FF3"
+      from_zone: "America/New_York"
+      on_error: error
+
+  - name: concentration_flag
+    type: boolean
+    role: attribute
+    transform:
+      kind: unresolved
+      note: >
+        Flags a position breaching the sovereign concentration limit by country and credit
+        rating. The limit table and whether the threshold is evaluated at position date or
+        at the risk run were both open questions during mapping.
+      raised_by: "import:risk_mapping_sheet_row_143"
+      owner: "risk methodology"

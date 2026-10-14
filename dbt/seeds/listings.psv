@@ -1,0 +1,4 @@
+exchange_code|ticker|eff_date|board_lot_txt
+XNAS|AAPL|2026-01-01|100
+XNAS|AAPL|2026-06-01|10
+XNYS|IBM|2026-01-01|100

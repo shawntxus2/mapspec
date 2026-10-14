@@ -1,0 +1,100 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+
+hash_policy:
+  algorithm: sha256
+  storage: hex
+  hex_case: lower
+  framing: length_prefix
+  column_order: declared
+
+target:
+  layer: dimension
+  name: dim_listing
+  schema: mart
+  description: >
+    A listing, identified by exchange plus ticker. Here to exercise a two-column natural
+    key: the same ticker on two exchanges is two listings, so neither column identifies a
+    row alone. A fact resolves it through its own column names, which differ from these.
+  grain: [listing_durable_key, valid_from]
+  natural_key: [exchange_code, ticker]
+  natural_key_stability: stable
+  materialization: merge
+
+durable_key:
+  name: listing_durable_key
+  strategy: sequence
+  type: int
+  cardinality:
+    entities: 100000
+  assignment: sequence
+  on_unknown: assign_new
+
+scd:
+  type: 2
+  derivation: source_provided
+  surrogate_key:
+    name: listing_key
+    strategy: sequence
+    cardinality:
+      entities: 100000
+      avg_versions: 10
+    type: int
+  effective_from: valid_from
+  effective_to: valid_to
+  bound: "[from, to)"
+  open_sentinel: "9999-12-31 00:00:00.000"
+  source_effective_from: "lst.eff_date"
+  source_timestamp_promotion: start_of_day
+  on_duplicate_instant: error
+  current_flag: is_current
+  version_number: version_no
+  change_hash: record_hash
+  attribute_hash: attribute_hash
+
+sources:
+  - alias: lst
+    kind: delimited
+    system: vendor_ref
+    transport: sftp
+    serialization: delimited
+    uri: "seeds/listings.psv"
+    delimiter: "|"
+    header: true
+    source_zone: "UTC"
+    landing: native_read
+    projection:
+      - { name: exchange_code,  from: 1, type: varchar(8) }
+      - { name: ticker,         from: 2, type: varchar(12) }
+      - { name: eff_date,       from: 3, type: varchar(10) }
+      - { name: board_lot_txt,  from: 4, type: varchar(10) }
+
+columns:
+  - name: exchange_code
+    type: varchar(8)
+    nullable: false
+    role: natural_key
+    scd_behavior: { type: 1 }
+    transform:
+      kind: direct
+      source: "lst.exchange_code"
+
+  - name: ticker
+    type: varchar(12)
+    nullable: false
+    role: natural_key
+    scd_behavior: { type: 1 }
+    transform:
+      kind: direct
+      source: "lst.ticker"
+
+  - name: board_lot
+    type: int
+    scd_behavior: { type: 2 }
+    transform:
+      kind: cast
+      source: "lst.board_lot_txt"
+      to: int
+      on_error: error

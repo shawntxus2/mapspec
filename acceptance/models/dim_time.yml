@@ -1,0 +1,21 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+
+target:
+  layer: dimension
+  name: dim_time
+  schema: mart
+  description: >
+    Time of day at second grain, 86,400 rows. Deliberately time zone naive: it is a clock
+    reading, not an instant, which is what lets facts role-play it twice, once for UTC and
+    once for local. Milliseconds are not modeled here; they stay on the fact as part of the
+    instant, for ordering and duration. Location specific dayparts belong in a bridge, not
+    on this dimension.
+  grain: [time_key]
+  generated:
+    kind: time_of_day
+    grain: second
+    key: hhmmss_int
+    bands: [hour, quarter_hour, am_pm]

@@ -1,0 +1,33 @@
+version: 2
+models:
+- name: fct_party_events
+  description: 'Events resolved to a party through the pair (source_system, party_id). Each event declares
+    its own system in src_sys, so the alpha event for P1 resolves to the alpha party and the beta event
+    for P1 to the beta party. Without the source_system predicate each event would match both P1 rows:
+    wrong data and a two-fold fan-out at once.'
+  columns:
+  - name: event_date
+    tests:
+    - not_null
+  - name: src_sys
+    tests:
+    - not_null
+  - name: party_id
+    tests:
+    - not_null
+  - name: party_key
+    tests:
+    - not_null
+    - dbt_utils.relationships_where:
+        to: ref('dim_party')
+        field: party_key
+        from_condition: party_key >= 0
+  - name: amount
+    tests:
+    - not_null
+  tests:
+  - dbt_utils.unique_combination_of_columns:
+      combination_of_columns:
+      - event_date
+      - src_sys
+      - party_id

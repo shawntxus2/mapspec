@@ -1,0 +1,21 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+
+target:
+  layer: dimension
+  name: dim_date
+  schema: mart
+  description: >
+    Conformed calendar dimension. Geography free on purpose. Holiday and business-day
+    flags live in dim_calendar_date because they differ by country and by exchange,
+    and a single is_holiday column would be wrong for most of a global estate.
+  grain: [date_key]
+  generated:
+    kind: calendar
+    from: "2015-01-01"
+    to: "2035-12-31"
+    key: yyyymmdd_int
+    calendars: [gregorian, iso_week, fiscal_apr]
+    holiday_flags: false

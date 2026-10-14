@@ -1,0 +1,130 @@
+# Construct coverage registry. Data, not code: the emitter's status for every construct the
+# schema declares. constructs.py enumerates the schema and fails the build if a construct is
+# missing here, so this cannot go stale. EXERCISED is computed by scanning the acceptance
+# specs, never read from here.
+#
+# status:
+#   generated  the emitter produces it
+#   stub       declared and validated, the emitter skips it with a message (honest)
+#   ignored    declared, the emitter silently does nothing (reads as supported, is not)
+#
+# probe (def: and property: entries): how to detect the construct in a spec. Enum constructs
+# are detected from their id and need none. One of:
+#   always | top:<key> | project:<key> | target:<key> | scd:<key>
+#   column_has:<key> | source_has:<key> | column_transform:<kind>
+constructs:
+  # --- $defs: primitives and structure
+  - { id: "def:identifier",        status: generated, probe: {always: true},                  note: "primitive: an SQL identifier" }
+  - { id: "def:sqlExpression",     status: generated, probe: {always: true},                  note: "primitive: an SQL expression" }
+  - { id: "def:keyExpressionList", status: generated, probe: {always: true},                  note: "primitive: one key expression or a list, for composite keys" }
+  - { id: "def:timestampLiteral",  status: generated, probe: {always: true},                  note: "primitive: a millisecond timestamp literal" }
+  - { id: "def:ianaZone",          status: generated, probe: {always: true},                  note: "primitive: an IANA zone id" }
+  - { id: "def:platformName",      status: generated, probe: {always: true},                  note: "primitive: a platform name" }
+  - { id: "def:keyType",           status: generated, probe: {always: true},                  note: "primitive: a key column type" }
+  - { id: "def:memberRoute",       status: generated, probe: {always: true},                  note: "lookup failure route: a member name, null, or error" }
+  - { id: "def:project",           status: generated, probe: {always: true},                  note: "project block; its parts are tracked separately" }
+  - { id: "def:target",            status: generated, probe: {always: true},                  note: "target block" }
+  - { id: "def:scd",               status: generated, probe: {scd: type},                     note: "scd block on a Type 2 dimension" }
+  - { id: "def:generated",         status: generated, probe: {target: generated},             note: "generated-model container; kinds tracked separately" }
+  - { id: "def:source",            status: generated, probe: {top: sources},                  note: "source declarations" }
+  - { id: "def:projectionColumn",  status: generated, probe: {source_has: projection},        note: "a projected source column" }
+  - { id: "def:column",            status: generated, probe: {always: true},                  note: "a target column" }
+  - { id: "def:transform",         status: generated, probe: {always: true},                  note: "a column transform; kinds tracked separately" }
+  - { id: "def:transport",         status: generated, probe: {source_has: transport},         note: "source transport" }
+  - { id: "def:serialization",     status: generated, probe: {source_has: serialization},     note: "source serialization" }
+  - { id: "def:cardinality",       status: generated, probe: {always: true},                  note: "validation input for key sizing; not emitted" }
+  - { id: "def:scdBehavior",       status: generated, probe: {column_has: scd_behavior},      note: "Kimball behavior per column; read for hash grouping" }
+
+  # --- $defs: features the emitter produces
+  - { id: "def:specialMembers",    status: generated, probe: {always: true},                  note: "member rows emitted on every dimension" }
+  - { id: "def:hashPolicy",        status: generated, probe: {top: hash_policy},              note: "hash algorithm and framing" }
+  - { id: "def:durableKey",        status: generated, probe: {top: durable_key},              note: "durable key emitted as dense_rank; the declared strategy is not honored" }
+  - { id: "def:survivorship",      status: generated, probe: {top: survivorship},             note: "survived columns via source_precedence and specific_source only" }
+  - { id: "def:survivorshipRule",  status: generated, probe: {top: survivorship},             note: "a survivorship rule" }
+
+  # --- $defs: the transform kinds, mirrored by transform:<kind> below
+  - { id: "def:tDirect",      status: generated, probe: {column_transform: direct},      note: "see transform:direct" }
+  - { id: "def:tCast",        status: generated, probe: {column_transform: cast},        note: "see transform:cast" }
+  - { id: "def:tExpression",  status: generated, probe: {column_transform: expression},  note: "see transform:expression" }
+  - { id: "def:tConditional", status: generated, probe: {column_transform: conditional}, note: "see transform:conditional" }
+  - { id: "def:tLookup",      status: generated, probe: {column_transform: lookup},      note: "see transform:lookup" }
+  - { id: "def:tAggregate",   status: generated, probe: {column_transform: aggregate},   note: "see transform:aggregate" }
+  - { id: "def:tConstant",    status: generated, probe: {column_transform: constant},    note: "see transform:constant" }
+  - { id: "def:tSurvived",    status: generated, probe: {column_transform: survived},    note: "see transform:survived" }
+  - { id: "def:tUnresolved",  status: generated, probe: {column_transform: unresolved},  note: "see transform:unresolved" }
+
+  # --- $defs: declared but not generated
+  - { id: "def:timeline",            status: stub,    probe: {scd: timelines},            note: "attribute_timelines timelines; validated, skipped with a message" }
+  # audited: each of these produces no shape rather than a wrong one, so ignored not substituted.
+  - { id: "def:timestampPolicy",     status: ignored, probe: {project: timestamp_policy}, note: "metadata, not read; timestamp columns come from cast transforms, so no wrong shape is emitted" }
+  - { id: "def:currentView",         status: ignored, probe: {scd: current_view},         note: "the _current view is simply absent, not emitted wrong" }
+  - { id: "def:contributionLineage", status: ignored, probe: {top: contribution_lineage}, note: "the emitter does not read it; no lineage side table is emitted" }
+  - { id: "def:lateArrival",         status: ignored, probe: {top: late_arrival},         note: "the emitter does not read it; no retroactive-insert handling is emitted" }
+  - { id: "def:miniDimension",       status: ignored, probe: {top: mini_dimensions},      note: "Type 4 mini-dimension banding; no mini dimension is emitted" }
+  - { id: "def:columnGroup",         status: ignored, probe: {top: column_groups},        note: "the emitter does not read it; no grouped columns are emitted" }
+  - { id: "def:temporalKeys",        status: ignored, probe: {top: column_groups},        note: "the declared derived time keys are absent, not emitted wrong" }
+
+  # --- transform kinds
+  - { id: "transform:direct",      status: generated, note: "direct column copy" }
+  - { id: "transform:cast",        status: generated, note: "typed cast" }
+  - { id: "transform:expression",  status: generated, note: "authored SQL expression" }
+  - { id: "transform:conditional", status: generated, note: "case expression" }
+  - { id: "transform:lookup",      status: generated, note: "point-in-time dimension lookup" }
+  - { id: "transform:aggregate",   status: generated, note: "aggregate" }
+  - { id: "transform:constant",    status: generated, note: "constant" }
+  - { id: "transform:survived",    status: generated, note: "survived value across sources" }
+  - { id: "transform:unresolved",  status: generated, note: "emits a TODO and a typed null, which is the generated behavior" }
+
+  # --- SCD types
+  - { id: "scd.type:1", status: substituted, note: "emits the Type 2 shape regardless, so a declared overwrite dimension carries full history" }
+  - { id: "scd.type:2", status: generated,   note: "versioned dimension" }
+
+  # --- derivations
+  - { id: "derivation:change_detection",    status: generated, note: "hash-based change detection" }
+  - { id: "derivation:source_provided",     status: generated, note: "source carries its own effectivity" }
+  - { id: "derivation:attribute_timelines", status: stub,      note: "emit_dimension skips with a message" }
+
+  # --- surrogate key strategies
+  - { id: "surrogate_key.strategy:sequence", status: generated, note: "row_number" }
+  - { id: "surrogate_key.strategy:hash",     status: ignored,   note: "the emitter emits a sequence regardless; hash never generated" }
+
+  # --- durable key strategies. The emitter emits dense_rank, a per-entity sequence.
+  # sequence declares exactly that and is honored. crosswalk and hash_natural_key both
+  # promise a key durable across refreshes, which a sequence is not: inserting an entity
+  # shifts every later dense_rank, so a fact carrying that key points at a different entity
+  # after a refresh. Both are therefore substituted, the status describing what the emitter
+  # does when asked, not whether anything currently asks.
+  - { id: "durable_key.strategy:sequence",         status: generated,   note: "dense_rank per entity, which is what the emitter emits" }
+  - { id: "durable_key.strategy:crosswalk",        status: substituted, note: "emits dense_rank, not a persistent crosswalk mapping, so it is not durable across refreshes" }
+  - { id: "durable_key.strategy:hash_natural_key", status: substituted, note: "emits dense_rank, a sequence, not a reproducible hash of the natural key" }
+
+  # --- generated model kinds
+  - { id: "generated.kind:calendar",                 status: generated, note: "calendar dimension" }
+  - { id: "generated.kind:time_of_day",              status: generated, note: "time-of-day dimension" }
+  - { id: "generated.kind:identity_crosswalk",       status: stub,      note: "emit_generated skips with a message" }
+  - { id: "generated.kind:model_signature_registry", status: stub,      note: "emit_generated skips with a message" }
+
+  # --- survivorship rule strategies
+  - { id: "survivorship.strategy:source_precedence", status: generated,   note: "coalesce in precedence order" }
+  - { id: "survivorship.strategy:specific_source",   status: generated,   note: "take one named source" }
+  - { id: "survivorship.strategy:most_recent",       status: substituted, note: "emits precedence coalesce, so 'most recent source wins' silently becomes 'first in precedence wins'" }
+  - { id: "survivorship.strategy:most_complete",     status: substituted, note: "emits precedence coalesce, not the most complete value" }
+  - { id: "survivorship.strategy:aggregate",         status: substituted, note: "emits precedence coalesce, not an aggregate" }
+  - { id: "survivorship.strategy:manual",            status: substituted, note: "emits precedence coalesce, not the manual resolution" }
+
+  # --- before_first (part of the attribute_timelines stub)
+  - { id: "before_first:null",       status: stub, note: "span before an attribute's first value; part of attribute_timelines" }
+  - { id: "before_first:unknown",    status: stub, note: "part of attribute_timelines" }
+  - { id: "before_first:carry_back", status: stub, note: "part of attribute_timelines" }
+
+  # --- cast on_error, per platform. DuckDB honors null with try_cast; PostgreSQL has no
+  # try_cast and no clean guarded form (a general value-test before casting is not clean), so
+  # null is substituted there: a bad value raises instead of nulling. error raises on both, as
+  # declared. sentinel is not implemented anywhere.
+  - { id: "cast.on_error:error",    status: generated, note: "a bad cast raises, which is the declared behavior on both platforms" }
+  - { id: "cast.on_error:null",     status: { default: generated, postgres: substituted },
+      note: "DuckDB try_cast nulls a bad value; PostgreSQL has no try_cast and no clean guard, so it raises" }
+  - { id: "cast.on_error:sentinel", status: substituted, note: "the emitter does not implement the sentinel; a bad cast raises" }
+
+  # --- optional properties the emitter is expected to act on
+  - { id: "property:project.target_platform", status: ignored, probe: {project: target_platform}, note: "the emitter writes DuckDB and ignores it; transpilation is next" }

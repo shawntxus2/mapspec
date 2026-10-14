@@ -1,0 +1,69 @@
+version: 2
+sources:
+- name: vendor_ref
+  schema: vendor_ref
+  tables:
+  - name: lst
+    description: delimited source. seeds/listings.psv. landing is not dbt's job; see landing/
+    meta:
+      external_location: 'read_csv(''seeds/listings.psv'', delim=''|'', header=true, columns={''exchange_code'':
+        ''varchar(8)'', ''ticker'': ''varchar(12)'', ''eff_date'': ''varchar(10)'', ''board_lot_txt'':
+        ''varchar(10)''})'
+      formatter: template
+  - name: sec
+    description: delimited source. seeds/securities$ref.psv. landing is not dbt's job; see landing/
+    meta:
+      external_location: 'read_csv(''seeds/securities$$ref.psv'', delim=''|'', header=true, columns={''security_id'':
+        ''varchar(12)'', ''eff_date_txt'': ''varchar(10)'', ''ticker'': ''varchar(12)'', ''issuer_name'':
+        ''varchar(200)'', ''sector_cd'': ''varchar(8)'', ''credit_rating'': ''varchar(8)'', ''par_value_txt'':
+        ''varchar(30)'', ''maturity_dt_txt'': ''varchar(10)'', ''exchange_mic_txt'': ''varchar(4)''})'
+      formatter: template
+- name: reference
+  schema: reference
+  tables:
+  - name: src
+    description: delimited source. seeds/parties.psv. landing is not dbt's job; see landing/
+    meta:
+      external_location: 'read_csv(''seeds/parties.psv'', delim=''|'', header=true, columns={''source_system'':
+        ''varchar(20)'', ''party_id'': ''varchar(12)'', ''eff_date'': ''varchar(10)'', ''party_name'':
+        ''varchar(80)''})'
+      formatter: template
+  - name: snap
+    description: delimited source. seeds/products_cd.psv. landing is not dbt's job; see landing/
+    meta:
+      external_location: 'read_csv(''seeds/products_cd.psv'', delim=''|'', header=true, columns={''batch_date'':
+        ''varchar(10)'', ''product_id'': ''varchar(12)'', ''product_name'': ''varchar(40)'', ''category'':
+        ''varchar(12)''})'
+      formatter: template
+  - name: rc
+    description: delimited source. seeds/rate_card.psv. landing is not dbt's job; see landing/
+    meta:
+      external_location: 'read_csv(''seeds/rate_card.psv'', delim=''|'', header=true, columns={''batch_date'':
+        ''varchar(10)'', ''rate_id'': ''varchar(8)'', ''haircut_txt'': ''varchar(16)''})'
+      formatter: template
+  - name: ev
+    description: delimited source. seeds/party_events.psv. landing is not dbt's job; see landing/
+    meta:
+      external_location: 'read_csv(''seeds/party_events.psv'', delim=''|'', header=true, columns={''event_date'':
+        ''varchar(10)'', ''src_sys'': ''varchar(20)'', ''party_id'': ''varchar(12)'', ''amount_txt'':
+        ''varchar(30)''})'
+      formatter: template
+- name: custody
+  schema: custody
+  tables:
+  - name: hld
+    description: delimited source. seeds/holdings.psv. landing is not dbt's job; see landing/
+    meta:
+      external_location: 'read_csv(''seeds/holdings.psv'', delim=''|'', header=true, columns={''holding_date'':
+        ''varchar(10)'', ''account_id'': ''varchar(20)'', ''security_id'': ''varchar(12)'', ''quantity_txt'':
+        ''varchar(30)'', ''market_value_txt'': ''varchar(30)'', ''ref_security_id'': ''varchar(12)''})'
+      formatter: template
+- name: marketdata
+  schema: marketdata
+  tables:
+  - name: q
+    description: delimited source. seeds/quotes.psv. landing is not dbt's job; see landing/
+    meta:
+      external_location: 'read_csv(''seeds/quotes.psv'', delim=''|'', header=true, columns={''quote_date'':
+        ''varchar(10)'', ''mic'': ''varchar(8)'', ''symbol'': ''varchar(12)'', ''px_txt'': ''varchar(30)''})'
+      formatter: template

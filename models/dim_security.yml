@@ -1,0 +1,218 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+  timestamp_policy:
+    storage: utc_instant
+    retain_source_zone: true
+    zone_representation: iana_zone_id
+    tzdata_version: "2026a"
+    ambiguous_local: error
+    nonexistent_local: error
+
+hash_policy:
+  algorithm: sha256
+  storage: hex
+  hex_case: lower
+  strip_prefix: true
+  framing: length_prefix
+  null_sentinel: "\u0000NULL"
+  empty_sentinel: "\u0000EMPTY"
+  numeric: cast_to_declared_scale
+  timestamp_format: "YYYY-MM-DD HH24:MI:SS.FF3"
+  trim_text: true
+  column_order: declared
+
+target:
+  layer: dimension
+  name: dim_security
+  schema: mart
+  description: >
+    Security reference data delivered as a pipe delimited extract that already carries its
+    own effectivity. The dimension preserves that history rather than deriving it, which is
+    what source_provided means: no change detection, no hashing of attributes to decide
+    whether something moved. The vendor said when it moved.
+
+    Only a start date arrives, so valid_to is derived with a window function over the
+    natural key. That is the single most commonly hand written and most commonly
+    inconsistent piece of Type-2 SQL in any estate.
+  grain: [security_durable_key, valid_from]
+  natural_key: [source_system, security_id]
+  natural_key_stability: stable
+  materialization: merge
+
+durable_key:
+  name: security_durable_key
+  strategy: sequence
+  type: int
+  cardinality:
+    entities: 2000000
+  assignment: sequence
+  on_unknown: assign_new
+
+scd:
+  type: 2
+  derivation: source_provided
+  surrogate_key:
+    name: security_key
+    strategy: sequence
+    cardinality:
+      entities: 2000000
+      avg_versions: 20
+    type: int
+  effective_from: valid_from
+  effective_to: valid_to
+  bound: "[from, to)"
+  open_sentinel: "9999-12-31 00:00:00.000"
+  source_effective_from: "sec.eff_date_txt"
+  source_effective_to: { derive: lead }
+  source_timestamp_promotion: start_of_day
+  on_duplicate_instant: error
+  current_flag: is_current
+  version_number: version_no
+  change_hash: record_hash
+  attribute_hash: attribute_hash
+  current_view:
+    generate: true
+    name: dim_security_current
+  audit:
+    loaded_at: dw_load_ts
+    source_system: dw_source_system
+    tzdata_version: dw_tzdata_version
+
+late_arrival:
+  mode: retroactive_insert
+  affected_facts: report
+  dedupe_on_change_hash: true
+  max_backdating: P5Y
+
+sources:
+  - alias: sec
+    kind: delimited
+    system: vendor_ref
+    transport: sftp
+    serialization: delimited
+    uri: "s3://raw/securities/*.psv"
+    delimiter: "|"
+    header: true
+    encoding: utf-8
+    quote: '"'
+    null_values: ["", "NULL", "N/A"]
+    source_zone: "America/New_York"
+    landing: native_read
+    projection:
+      - { name: security_id,      from: 1, type: varchar(12) }
+      - { name: eff_date_txt,     from: 2, type: varchar(10) }
+      - { name: ticker,           from: 3, type: varchar(12) }
+      - { name: issuer_name,      from: 4, type: varchar(200) }
+      - { name: sector_cd,        from: 5, type: varchar(8) }
+      - { name: credit_rating,    from: 6, type: varchar(8) }
+      - { name: par_value_txt,    from: 7, type: varchar(30) }
+      - { name: maturity_dt_txt,  from: 8, type: varchar(10) }
+
+columns:
+  - name: source_system
+    type: varchar(20)
+    nullable: false
+    role: natural_key
+    scd_behavior: { type: 1 }
+    transform:
+      kind: constant
+      value: vendor_ref
+
+  - name: security_id
+    type: varchar(12)
+    nullable: false
+    role: natural_key
+    scd_behavior: { type: 1 }
+    transform:
+      kind: direct
+      source: "sec.security_id"
+
+  - name: ticker
+    type: varchar(12)
+    scd_behavior: { type: 2 }
+    transform:
+      kind: cast
+      source: "sec.ticker"
+      to: varchar(12)
+      trim: true
+      on_error: "null"
+
+  - name: issuer_name
+    type: varchar(200)
+    scd_behavior: { type: 2 }
+    transform:
+      kind: cast
+      source: "sec.issuer_name"
+      to: varchar(200)
+      trim: true
+      on_error: "null"
+
+  - name: sector_code
+    type: varchar(8)
+    scd_behavior: { type: 2 }
+    allowed_values: [ENERGY, FIN, HLTH, INDU, INFT, MATR, REAL, UTIL, CONS, COMM]
+    transform:
+      kind: cast
+      source: "sec.sector_cd"
+      to: varchar(8)
+      trim: true
+      on_error: "null"
+
+  - name: credit_rating
+    type: varchar(8)
+    scd_behavior: { type: 2 }
+    transform:
+      kind: cast
+      source: "sec.credit_rating"
+      to: varchar(8)
+      trim: true
+      on_error: "null"
+
+  - name: par_value
+    type: numeric(18,4)
+    scd_behavior: { type: 2 }
+    additivity: non_additive
+    transform:
+      kind: cast
+      source: "sec.par_value_txt"
+      to: numeric(18,4)
+      rounding: half_up
+      on_error: error
+
+  - name: maturity_date
+    type: date
+    scd_behavior: { type: 2 }
+    transform:
+      kind: cast
+      source: "sec.maturity_dt_txt"
+      to: date
+      format: "YYYY-MM-DD"
+      on_error: "null"
+
+  - name: maturity_band
+    type: varchar(12)
+    scd_behavior: { type: 2 }
+    allowed_values: [UNDER_1Y, 1Y_3Y, 3Y_5Y, 5Y_10Y, OVER_10Y, UNKNOWN]
+    transform:
+      kind: conditional
+      cases:
+        - { when: "sec.maturity_dt_txt is null", then: "'UNKNOWN'" }
+        - { when: "date_diff('year', current_date, cast(sec.maturity_dt_txt as date)) < 1",  then: "'UNDER_1Y'" }
+        - { when: "date_diff('year', current_date, cast(sec.maturity_dt_txt as date)) < 3",  then: "'1Y_3Y'" }
+        - { when: "date_diff('year', current_date, cast(sec.maturity_dt_txt as date)) < 5",  then: "'3Y_5Y'" }
+        - { when: "date_diff('year', current_date, cast(sec.maturity_dt_txt as date)) < 10", then: "'5Y_10Y'" }
+      else: "'OVER_10Y'"
+
+  - name: haircut_pct
+    type: numeric(9,6)
+    scd_behavior: { type: 2 }
+    transform:
+      kind: unresolved
+      note: >
+        Haircut is keyed on maturity band, credit rating and sector, and the rate table was
+        not included in the extract. Needs the reference table identified and its own
+        effectivity, since haircuts change on their own schedule.
+      raised_by: "import:vendor_ref_sheet_row_61"
+      owner: "risk reference data"

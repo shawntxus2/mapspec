@@ -1,0 +1,5 @@
+batch_date|product_id|product_name|category
+2026-01-01|P1|Widget|HARDWARE
+2026-02-01|P1|Widget|SOFTWARE
+2026-01-01|P2|Gadget|HARDWARE
+2026-02-01|P2|Gizmo|HARDWARE

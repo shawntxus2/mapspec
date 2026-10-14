@@ -1,0 +1,75 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+
+target:
+  layer: fact
+  name: fct_party_events
+  schema: mart
+  description: >
+    Events resolved to a party through the pair (source_system, party_id). Each event
+    declares its own system in src_sys, so the alpha event for P1 resolves to the alpha
+    party and the beta event for P1 to the beta party. Without the source_system predicate
+    each event would match both P1 rows: wrong data and a two-fold fan-out at once.
+  grain: [event_date, src_sys, party_id]
+  as_of: "ev.event_date"
+  as_of_promotion: end_of_day
+
+sources:
+  - alias: ev
+    kind: delimited
+    system: reference
+    transport: sftp
+    serialization: delimited
+    uri: "seeds/party_events.psv"
+    delimiter: "|"
+    header: true
+    source_zone: "UTC"
+    landing: native_read
+    projection:
+      - { name: event_date, from: 1, type: varchar(10) }
+      - { name: src_sys,    from: 2, type: varchar(20) }
+      - { name: party_id,   from: 3, type: varchar(12) }
+      - { name: amount_txt, from: 4, type: varchar(30) }
+
+columns:
+  - name: event_date
+    type: date
+    nullable: false
+    role: primary_key
+    transform: { kind: cast, source: "ev.event_date", to: date, format: "YYYY-MM-DD", on_error: error }
+
+  - name: src_sys
+    type: varchar(20)
+    nullable: false
+    role: degenerate
+    transform: { kind: direct, source: "ev.src_sys" }
+
+  - name: party_id
+    type: varchar(12)
+    nullable: false
+    role: degenerate
+    transform: { kind: direct, source: "ev.party_id" }
+
+  - name: party_key
+    type: int
+    nullable: false
+    role: foreign_key
+    references: { model: dim_party, column: party_key }
+    transform:
+      kind: lookup
+      dimension: dim_party
+      natural_key: "ev.party_id"
+      source_system: "ev.src_sys"
+      emit: { surrogate: party_key, durable: party_durable_key }
+      on_null_key: not_provided
+      on_miss: unknown
+      on_no_version: no_version_at_date
+
+  - name: amount
+    type: numeric(18,2)
+    nullable: false
+    role: measure
+    additivity: additive
+    transform: { kind: cast, source: "ev.amount_txt", to: "numeric(18,2)", rounding: half_up, on_error: error }

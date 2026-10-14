@@ -1,0 +1,385 @@
+# Platform capability registry
+#
+# Data, not code. The validator traces every column's declared path
+#
+#   source platform type -> transport -> serialization -> landing -> target platform type
+#
+# and flags the narrowest hop. A hop that CANNOT represent the declared precision is an
+# error. A hop that can but is configured not to is a warning.
+#
+# Entries marked `verify: true` are the ones to confirm against current vendor
+# documentation before they become rules that fail someone's build.
+
+registry_version: 1
+
+canonical_types:
+  # Every platform type normalizes to one of these. Bare type names are never compared,
+  # because DATE does not mean the same thing on every platform.
+  - date          # calendar date, no time component
+  - instant       # a point in time, with a fractional-second capability
+  - instant_tz    # a point in time carrying an offset or zone
+  - time          # clock reading, no date
+  - decimal
+  - integer
+  - text
+  - binary
+  - boolean
+
+platforms:
+
+  snowflake:
+    types:
+      date:               { canonical: date }
+      timestamp_ntz:      { canonical: instant,    max_fractional_digits: 9, default_fractional_digits: 9 }
+      timestamp_ltz:      { canonical: instant_tz, max_fractional_digits: 9, default_fractional_digits: 9,
+                            unsafe_for: [effectivity],
+                            reason: "rendered in the session time zone, so the value read depends on who is asking" }
+      timestamp_tz:       { canonical: instant_tz, max_fractional_digits: 9, default_fractional_digits: 9 }
+      time:               { canonical: time,       max_fractional_digits: 9 }
+      number:             { canonical: decimal,    max_precision: 38, max_scale: 37 }
+    notes: "TIMESTAMP_NTZ holding UTC is the recommended effectivity storage."
+
+  oracle:
+    types:
+      date:               { canonical: instant,    max_fractional_digits: 0,
+                            warn: "Oracle DATE is a date PLUS a time to the second, not an ANSI DATE.
+                                   Mapping it to another platform's DATE silently discards the time component." }
+      timestamp:          { canonical: instant,    max_fractional_digits: 9, default_fractional_digits: 6 }
+      timestamp_tz:       { canonical: instant_tz, max_fractional_digits: 9, default_fractional_digits: 6 }
+      timestamp_ltz:      { canonical: instant,    max_fractional_digits: 9, default_fractional_digits: 6,
+                            unsafe_for: [effectivity],
+                            reason: "normalized to the database time zone on write and converted to the session
+                                     time zone on read, so the value depends on the reader" }
+      number:             { canonical: decimal,    max_precision: 38 }
+
+  db2_zos:
+    types:
+      date:               { canonical: date }
+      timestamp:          { canonical: instant,    max_fractional_digits: 12, default_fractional_digits: 6 }
+      time:               { canonical: time,       max_fractional_digits: 0 }
+      decimal:            { canonical: decimal,    max_precision: 31,
+                            warn: "DB2 caps DECIMAL at 31 digits, not 38. A NUMBER(38,...) crossing this hop truncates." }
+
+  sqlserver:
+    types:
+      date:               { canonical: date }
+      datetime:           { canonical: instant,    fractional_digits: 3,
+                            rounding: "1/300 second",
+                            warn: "DATETIME rounds to increments of .000, .003 and .007 seconds.
+                                   Millisecond effectivity routed through this type is no longer millisecond precision." }
+      datetime2:          { canonical: instant,    max_fractional_digits: 7, default_fractional_digits: 7 }
+      datetimeoffset:     { canonical: instant_tz, max_fractional_digits: 7 }
+      time:               { canonical: time,       max_fractional_digits: 7 }
+      decimal:            { canonical: decimal,    max_precision: 38 }
+
+  teradata:
+    verify: true
+    types:
+      date:               { canonical: date }
+      timestamp:          { canonical: instant,    max_fractional_digits: 6, default_fractional_digits: 6, verify: true }
+      timestamp_tz:       { canonical: instant_tz, max_fractional_digits: 6, verify: true }
+      number:             { canonical: decimal,    max_precision: 38, verify: true }
+
+  postgres:
+    types:
+      date:               { canonical: date }
+      timestamp:          { canonical: instant,    max_fractional_digits: 6, default_fractional_digits: 6 }
+      timestamptz:        { canonical: instant_tz, max_fractional_digits: 6 }
+      time:               { canonical: time,       max_fractional_digits: 6 }
+      numeric:            { canonical: decimal,    max_precision: 1000,
+                            note: "effectively unbounded for warehouse purposes" }
+
+  greenplum:
+    inherits: postgres
+
+  duckdb:
+    types:
+      date:               { canonical: date }
+      timestamp:          { canonical: instant,    max_fractional_digits: 6, default_fractional_digits: 6 }
+      timestamp_ms:       { canonical: instant,    max_fractional_digits: 3 }
+      timestamp_ns:       { canonical: instant,    max_fractional_digits: 9 }
+      timestamptz:        { canonical: instant_tz, max_fractional_digits: 6 }
+      decimal:            { canonical: decimal,    max_precision: 38 }
+    native_read: [delimited, json, parquet]
+    no_native_read: [xml]
+    notes: "Acceptance target. CSV, pipe delimited and JSON land natively, so the worked
+            example runs end to end with no external loader. XML has no native reader."
+
+  bigquery:
+    types:
+      date:               { canonical: date }
+      datetime:           { canonical: instant,    max_fractional_digits: 6 }
+      timestamp:          { canonical: instant_tz, max_fractional_digits: 6 }
+      numeric:            { canonical: decimal,    max_precision: 38, max_scale: 9 }
+      bignumeric:         { canonical: decimal,    max_precision: 76, max_scale: 38 }
+
+  redshift:
+    types:
+      date:               { canonical: date }
+      timestamp:          { canonical: instant,    max_fractional_digits: 6 }
+      timestamptz:        { canonical: instant_tz, max_fractional_digits: 6 }
+      decimal:            { canonical: decimal,    max_precision: 38 }
+
+  mysql:
+    verify: true
+    types:
+      date:               { canonical: date }
+      datetime:           { canonical: instant,    max_fractional_digits: 6, default_fractional_digits: 0, verify: true }
+      timestamp:          { canonical: instant,    max_fractional_digits: 6, default_fractional_digits: 0, verify: true }
+      decimal:            { canonical: decimal,    max_precision: 65, verify: true }
+
+
+# Declared cross-platform differences. The differential (acceptance/differential.py) compares
+# every acceptance model on both tier-1 platforms row by row; a difference is a transpiler
+# defect to fix or a difference declared here with a reason. "They agree on this seed" is not
+# a reason. Declared (model, column) pairs are excluded from the comparison and reported.
+platform_differences:
+  - model: dim_security
+    column: dw_load_ts
+    platforms: [duckdb, postgres]
+    reason: >
+      The audit load timestamp is current_timestamp evaluated at build, so it differs by wall
+      clock and by session time zone (the container runs UTC) across engines and across runs.
+      It is load metadata, not modeled data, and is expected to differ.
+
+
+# Transpilation. Two tiers, because the Spark cannot execute Snowflake, SQL Server, Oracle
+# or DB2: tier-1 runs the full acceptance suite and is verified by execution; tier-2 is
+# parse-checked only with sqlglot and is never verified, only shown to parse. Add a tier-1
+# platform before a tier-2 one: parse is syntax, execution is proof.
+#
+#   dialect     the sqlglot dialect for expression translation and the tier-2 parse check.
+#               null means sqlglot has no dialect, so the platform cannot even be parsed.
+#   hash        per algorithm, the function, output encoding and case. Never from sqlglot,
+#               which leaves sha256 untranslated and would silently change every change_hash.
+#               {inner} is the length-prefixed framed concatenation, built dialect-neutrally.
+#   generators  which generator_templates block supplies calendar and time. Required.
+transpilation:
+  duckdb:
+    tier: 1
+    dialect: duckdb
+    generators: duckdb
+    hash:
+      sha256: "lower(sha256({inner}))"
+      md5: "lower(md5({inner}))"
+  postgres:
+    tier: 1
+    dialect: postgres
+    generators: standard
+    hash:
+      sha256: "lower(encode(sha256(({inner})::bytea), 'hex'))"
+      md5: "lower(md5({inner}))"
+  snowflake:
+    tier: 2
+    dialect: snowflake
+    generators: standard
+    hash:
+      sha256: "lower(sha2({inner}, 256))"
+      md5: "lower(md5_hex({inner}))"
+  sqlserver:
+    tier: 2
+    dialect: tsql
+    generators: standard
+    hash:
+      sha256: "lower(convert(varchar(64), hashbytes('SHA2_256', {inner}), 2))"
+  oracle:
+    tier: 2
+    dialect: oracle
+    generators: standard
+    hash:
+      sha256: "lower(standard_hash({inner}, 'SHA256'))"
+  db2_zos:
+    tier: 3
+    dialect: null
+    generators: standard
+    verify: true
+    note: "Its own tier, not tier 2: sqlglot has no DB2 dialect, so DB2 cannot be parse-checked,
+           where tier 2 at least parses. A dialect, or an engine to execute against, moves it up.
+           The hash is from Db2 12 for z/OS and unconfirmed."
+    hash:
+      sha256: "lower(hex(hash_sha256({inner})))"
+
+# Generator templates for the calendar and time dimensions. generate_series, the date-key
+# formatting and integer division vary enough that a per-platform template beats a hoped-for
+# translation. duckdb is the canonical source dialect emitted verbatim; standard is ANSI-ish
+# SQL that executes on postgres and parses in the tier-2 dialects. Each produces the real
+# rows and the marker column; the emitter appends the dialect-neutral member union.
+generator_templates:
+  duckdb:
+    calendar: |
+      with days as (
+        select cast(d as date) as full_date
+        from generate_series(date '{from}', date '{to}', interval 1 day) t(d)
+      )
+      select
+        cast(strftime(full_date, '%Y%m%d') as integer)        as date_key,
+        full_date,
+        extract(year from full_date)                          as calendar_year,
+        extract(quarter from full_date)                       as calendar_quarter,
+        extract(month from full_date)                         as calendar_month,
+        strftime(full_date, '%B')                             as month_name,
+        extract(day from full_date)                           as day_of_month,
+        extract(dow from full_date)                           as day_of_week,
+        strftime(full_date, '%A')                             as day_name,
+        extract(week from full_date)                          as iso_week,
+        extract(dow from full_date) between 1 and 5           as is_weekday,
+        cast(null as varchar)                                 as {marker}
+      from days
+    time: |
+      with secs as (select unnest(generate_series(0, 86399)) as s)
+      select
+        cast(printf('%02d%02d%02d', s // 3600, (s % 3600) // 60, s % 60) as integer) as time_key,
+        cast(s // 3600 as integer)                      as hour_24,
+        cast((s % 3600) // 60 as integer)               as minute_of_hour,
+        cast(s % 60 as integer)                         as second_of_minute,
+        printf('%02d:00', s // 3600)                    as hour_band,
+        printf('%02d:%02d', s // 3600, ((s % 3600) // 60) // 15 * 15) as quarter_hour_band,
+        case when s < 43200 then 'AM' else 'PM' end     as am_pm,
+        cast(null as varchar)                           as {marker}
+      from secs
+  standard:
+    calendar: |
+      with days as (
+        select cast(d as date) as full_date
+        from generate_series(date '{from}', date '{to}', interval '1 day') t(d)
+      )
+      select
+        cast(to_char(full_date, 'YYYYMMDD') as integer)       as date_key,
+        full_date,
+        extract(year from full_date)                          as calendar_year,
+        extract(quarter from full_date)                       as calendar_quarter,
+        extract(month from full_date)                         as calendar_month,
+        trim(to_char(full_date, 'Month'))                     as month_name,
+        extract(day from full_date)                           as day_of_month,
+        extract(dow from full_date)                           as day_of_week,
+        trim(to_char(full_date, 'Day'))                       as day_name,
+        extract(week from full_date)                          as iso_week,
+        extract(dow from full_date) between 1 and 5           as is_weekday,
+        cast(null as varchar)                                 as {marker}
+      from days
+    time: |
+      with secs as (select generate_series(0, 86399) as s)
+      select
+        cast(lpad((s / 3600)::text, 2, '0') || lpad(((s % 3600) / 60)::text, 2, '0') || lpad((s % 60)::text, 2, '0') as integer) as time_key,
+        cast(s / 3600 as integer)                       as hour_24,
+        cast((s % 3600) / 60 as integer)                as minute_of_hour,
+        cast(s % 60 as integer)                         as second_of_minute,
+        lpad((s / 3600)::text, 2, '0') || ':00'         as hour_band,
+        lpad((s / 3600)::text, 2, '0') || ':' || lpad((((s % 3600) / 60) / 15 * 15)::text, 2, '0') as quarter_hour_band,
+        case when s < 43200 then 'AM' else 'PM' end     as am_pm,
+        cast(null as varchar)                           as {marker}
+      from secs
+
+
+transports:
+
+  kafka:
+    record_timestamp:
+      fractional_digits: 3
+      note: "The Kafka record timestamp is epoch milliseconds. Payload precision is whatever
+             the serialization carries, which is usually finer. Deriving effectivity from the
+             record timestamp rather than the payload silently coarsens it."
+    payload_precision: from_serialization
+
+  ibm_mq:
+    verify: true
+    message_descriptor_time:
+      fractional_digits: 2
+      verify: true
+      note: "MQMD PutTime is believed to carry hundredths of a second, which is coarser than
+             millisecond effectivity. Confirm against current IBM documentation before this
+             becomes a build-failing rule. Payload precision is whatever the application wrote."
+    payload_precision: from_serialization
+
+  sftp:   { payload_precision: from_serialization }
+  s3:     { payload_precision: from_serialization }
+  https:  { payload_precision: from_serialization }
+  none:   { payload_precision: from_serialization }
+
+
+serialization:
+
+  json:
+    number:
+      representation: ieee754_double
+      safe_significant_digits: 15
+      rule: error
+      note: "Most JSON parsers land a number as a double. A decimal of more than 15 significant
+             digits loses precision before it reaches the warehouse and nothing errors.
+             The only safe path is serializing as a string, which the projection declares
+             with as_text: true."
+    timestamp:
+      depends_on: format_string
+      note: "Capability is unlimited because it is text. The format mask decides what survives.
+             A mask with no fractional seconds under a millisecond target is a warning."
+
+  avro:
+    timestamp:
+      logical_types: [timestamp-millis, timestamp-micros]
+      nanos_available: unknown
+      verify: true
+      note: "Confirm whether the Avro spec version in use offers a nanosecond logical type
+             before relying on anything finer than micros."
+    decimal:
+      representation: bytes_or_fixed_with_declared_precision_scale
+      max_precision: declared
+
+  protobuf:
+    timestamp:
+      representation: seconds_plus_nanos
+      fractional_digits: 9
+    decimal:
+      native: false
+      rule: warn
+      note: "Protobuf has no native decimal. Implementations use a string or a scaled integer.
+             A decimal crossing this hop must declare which."
+
+  delimited:
+    number:    { representation: text, note: "precision limited only by the written format" }
+    timestamp: { depends_on: format_string }
+
+  fixed_width:
+    number:    { representation: text }
+    timestamp: { depends_on: format_string }
+
+  xml:
+    number:    { representation: text }
+    timestamp: { depends_on: format_string }
+    note: "No native reader on DuckDB. Projection is accepted and the source entry is generated,
+           but landing is platform specific and is reported as not generated."
+
+  none: {}
+
+
+rules:
+
+  # Fail the build.
+  errors:
+    - id: PREC001
+      when: "a hop cannot represent the declared fractional-second precision"
+      example: "timestamp(3) effectivity passing through an Oracle DATE column"
+    - id: PREC002
+      when: "a hop cannot represent the declared decimal precision"
+      example: "numeric(38,4) crossing a DB2 hop capped at 31"
+    - id: PREC003
+      when: "a decimal of more than 15 significant digits crosses a JSON hop as a number"
+      remedy: "declare as_text: true on the projection column and cast on landing"
+    - id: TZ001
+      when: "an effectivity or as-of column resolves to a type marked unsafe_for: effectivity"
+      example: "Oracle TIMESTAMP WITH LOCAL TIME ZONE, Snowflake TIMESTAMP_LTZ"
+    - id: TZ002
+      when: "a source delivers local wall clock with neither a zone nor an offset and feeds effectivity"
+      remedy: "there is no correct conversion; declare source_zone on the source"
+
+  # Show in the coverage report, do not fail.
+  warnings:
+    - id: PREC010
+      when: "a cast format mask carries fewer fractional digits than the target type declares"
+    - id: PREC011
+      when: "a narrowing cast is declared within one platform"
+      example: "varchar(100) into varchar(20), numeric(18,4) into numeric(18,2)"
+    - id: PREC012
+      when: "a rounding mode is not declared on a narrowing decimal cast"
+    - id: TZ010
+      when: "future-dated effectivity is stored with an offset rather than an IANA zone id"
+      note: "an offset reconstructs the past exactly but cannot survive a rule change ahead of it"

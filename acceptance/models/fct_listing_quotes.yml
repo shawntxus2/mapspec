@@ -1,0 +1,75 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+
+target:
+  layer: fact
+  name: fct_listing_quotes
+  schema: mart
+  description: >
+    Quotes resolved to a listing through a two-column natural key, exchange plus ticker,
+    named mic and symbol on the fact. Exercises both halves of the lookup resolution at
+    once: the dimension's key columns differ in name from the fact's, and there are two of
+    them. The declared dimension_natural_key is checked against the dimension's own.
+  grain: [quote_date, mic, symbol]
+  as_of: "q.quote_date"
+  as_of_promotion: end_of_day
+
+sources:
+  - alias: q
+    kind: delimited
+    system: marketdata
+    transport: sftp
+    serialization: delimited
+    uri: "seeds/quotes.psv"
+    delimiter: "|"
+    header: true
+    source_zone: "UTC"
+    landing: native_read
+    projection:
+      - { name: quote_date, from: 1, type: varchar(10) }
+      - { name: mic,        from: 2, type: varchar(8) }
+      - { name: symbol,     from: 3, type: varchar(12) }
+      - { name: px_txt,     from: 4, type: varchar(30) }
+
+columns:
+  - name: quote_date
+    type: date
+    nullable: false
+    role: primary_key
+    transform: { kind: cast, source: "q.quote_date", to: date, format: "YYYY-MM-DD", on_error: error }
+
+  - name: mic
+    type: varchar(8)
+    nullable: false
+    role: degenerate
+    transform: { kind: direct, source: "q.mic" }
+
+  - name: symbol
+    type: varchar(12)
+    nullable: false
+    role: degenerate
+    transform: { kind: direct, source: "q.symbol" }
+
+  - name: listing_key
+    type: int
+    nullable: false
+    role: foreign_key
+    references: { model: dim_listing, column: listing_key }
+    transform:
+      kind: lookup
+      dimension: dim_listing
+      natural_key: ["q.mic", "q.symbol"]
+      dimension_natural_key: [exchange_code, ticker]
+      emit: { surrogate: listing_key, durable: listing_durable_key }
+      on_null_key: not_provided
+      on_miss: unknown
+      on_no_version: no_version_at_date
+
+  - name: price
+    type: numeric(18,4)
+    nullable: false
+    role: measure
+    additivity: non_additive
+    transform: { kind: cast, source: "q.px_txt", to: "numeric(18,4)", rounding: half_up, on_error: error }

@@ -1,0 +1,52 @@
+version: 2
+models:
+- name: dim_security
+  description: 'Security reference data delivered as a pipe delimited extract that already carries its
+    own effectivity. The dimension preserves that history rather than deriving it, which is what source_provided
+    means: no change detection, no hashing of attributes to decide whether something moved. The vendor
+    said when it moved. Only a start date arrives, so valid_to is derived with a window function over
+    the nat'
+  columns:
+  - name: source_system
+    tests:
+    - not_null:
+        config:
+          where: security_key >= 0
+  - name: security_id
+    tests:
+    - not_null:
+        config:
+          where: security_key >= 0
+  - name: sector_code
+    tests:
+    - accepted_values:
+        values:
+        - ENERGY
+        - FIN
+        - HLTH
+        - INDU
+        - INFT
+        - MATR
+        - REAL
+        - UTIL
+        - CONS
+        - COMM
+        config:
+          where: security_key >= 0
+  - name: maturity_band
+    tests:
+    - accepted_values:
+        values:
+        - UNDER_1Y
+        - 1Y_3Y
+        - 3Y_5Y
+        - 5Y_10Y
+        - OVER_10Y
+        - UNKNOWN
+        config:
+          where: security_key >= 0
+  tests:
+  - dbt_utils.unique_combination_of_columns:
+      combination_of_columns:
+      - security_durable_key
+      - valid_from

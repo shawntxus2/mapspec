@@ -1,0 +1,20 @@
+name: mapspec
+version: "1.0.0"
+config-version: 2
+profile: mapspec
+
+# models/ is written by `mapspec emit`. Edit the spec, not the SQL: a hand edit here is
+# overwritten on the next emit, and the point of the tool is that nobody hand edits.
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+# landing/ sits beside this project on purpose. dbt transforms; it does not ingest.
+# On DuckDB a file source is read through external_location in sources.yml, so landing is
+# a no-op here. On Snowflake it is somebody's real job, and the DDL in landing/ is theirs.
+
+models:
+  mapspec:
+    +materialized: table

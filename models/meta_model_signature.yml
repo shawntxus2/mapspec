@@ -1,0 +1,40 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+
+target:
+  layer: crosswalk
+  name: meta_model_signature
+  schema: meta
+  description: >
+    The column contract of every model, recorded as it was actually built, and Type 2 so it
+    can be reconstructed as of any date. Two tables are generated: the signature header and
+    the column rows behind it.
+
+    Two signatures, and the distinction is what keeps a harmless change harmless.
+
+    model_signature covers the full ordered contract: ordinal position, column name, data
+    type, nullability, role, scd_behavior and whether the column feeds change_hash. It
+    moves whenever anything structural moves. It does not cover descriptions, because a
+    documentation edit is not a contract change.
+
+    change_hash_signature covers only the Type 2 columns that feed change_hash, in order.
+    It is the one that decides whether a stored hash is still comparable to a newly
+    computed one. Adding a Type 1 or a Type 6 current column bumps the model signature and
+    leaves this one alone, so the next load does not version an entire dimension for
+    nothing. Adding a tracked column moves both, and that one genuinely needs handling.
+
+    At load time the loader compares the current change_hash_signature against the stored
+    one. On a mismatch, stored hashes were produced over a different column set and are not
+    comparable, so the generator emits a reconciliation step instead of silently
+    re-versioning every row. The table then permanently answers "why did every row in
+    dim_customer version on June first."
+
+    The validator can optionally read this table and warn before a run rather than after.
+    That read stays optional: the premise is that a spec validates offline from the model,
+    and a warehouse read is an enrichment, never a requirement.
+  grain: [model_name, valid_from]
+  generated:
+    kind: model_signature_registry
+    scope: project

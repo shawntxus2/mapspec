@@ -1,0 +1,19 @@
+version: 2
+models:
+- name: dim_rate_card
+  description: 'A collateral haircut card arriving as a batch snapshot. It exists to exercise one thing
+    a clean seed never does: a cast that fails. The vendor sometimes ships a non-numeric placeholder where
+    a rate is still being set, and on_error: null means that row carries a null rate rather than failing
+    the load. DuckDB honors that with try_cast; the differential and the PostgreSQL suite never see this
+    model, '
+  columns:
+  - name: rate_id
+    tests:
+    - not_null:
+        config:
+          where: rate_key >= 0
+  tests:
+  - dbt_utils.unique_combination_of_columns:
+      combination_of_columns:
+      - rate_durable_key
+      - valid_from

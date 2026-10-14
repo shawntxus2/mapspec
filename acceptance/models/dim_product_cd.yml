@@ -1,0 +1,99 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+
+hash_policy:
+  algorithm: sha256
+  storage: hex
+  hex_case: lower
+  framing: length_prefix
+  column_order: declared
+
+target:
+  layer: dimension
+  name: dim_product_cd
+  schema: mart
+  description: >
+    A product reference whose source carries no effective dates, only a batch date per
+    snapshot. Versions are derived by change detection over the Type 2 columns: a batch that
+    repeats the same content opens no version, a batch that changes a tracked attribute does.
+    This is the default derivation and the path most real sources take, and nothing tested it
+    until now. derivation is omitted on purpose so the schema default applies.
+  grain: [product_durable_key, valid_from]
+  natural_key: [product_id]
+  natural_key_stability: stable
+  materialization: merge
+
+durable_key:
+  name: product_durable_key
+  strategy: sequence
+  type: int
+  cardinality:
+    entities: 100000
+  assignment: sequence
+  on_unknown: assign_new
+
+scd:
+  type: 2
+  surrogate_key:
+    name: product_key
+    strategy: sequence
+    cardinality:
+      entities: 100000
+      avg_versions: 5
+    type: int
+  effective_from: valid_from
+  effective_to: valid_to
+  bound: "[from, to)"
+  open_sentinel: "9999-12-31 00:00:00.000"
+  source_effective_from: "snap.batch_date"
+  source_timestamp_promotion: start_of_day
+  on_duplicate_instant: error
+  current_flag: is_current
+  version_number: version_no
+  change_hash: record_hash
+  attribute_hash: attribute_hash
+
+sources:
+  - alias: snap
+    kind: delimited
+    system: reference
+    transport: sftp
+    serialization: delimited
+    uri: "seeds/products_cd.psv"
+    delimiter: "|"
+    header: true
+    source_zone: "UTC"
+    landing: native_read
+    projection:
+      - { name: batch_date,    from: 1, type: varchar(10) }
+      - { name: product_id,    from: 2, type: varchar(12) }
+      - { name: product_name,  from: 3, type: varchar(40) }
+      - { name: category,      from: 4, type: varchar(12) }
+
+columns:
+  - name: product_id
+    type: varchar(12)
+    nullable: false
+    role: natural_key
+    scd_behavior: { type: 1 }
+    transform:
+      kind: direct
+      source: "snap.product_id"
+
+  - name: product_name
+    type: varchar(40)
+    scd_behavior: { type: 1 }
+    description: Type 1. A corrected name overwrites in place and does not open a version, so a batch that changes only this must not version.
+    transform:
+      kind: direct
+      source: "snap.product_name"
+
+  - name: category
+    type: varchar(12)
+    scd_behavior: { type: 2 }
+    allowed_values: [HARDWARE, SOFTWARE]
+    transform:
+      kind: direct
+      source: "snap.category"

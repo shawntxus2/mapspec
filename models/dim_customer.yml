@@ -1,0 +1,396 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+  timestamp_policy:
+    storage: utc_instant
+    retain_source_zone: true
+    zone_representation: iana_zone_id
+    tzdata_version: "2026a"
+    business_date:
+      mode: stored
+      calendar_zone: "America/New_York"
+      cutover: "00:00"
+    ambiguous_local: error
+    nonexistent_local: error
+
+hash_policy:
+  algorithm: sha256
+  storage: hex
+  hex_case: lower
+  strip_prefix: true
+  framing: length_prefix
+  null_sentinel: "\u0000NULL"
+  empty_sentinel: "\u0000EMPTY"
+  numeric: cast_to_declared_scale
+  timestamp_format: "YYYY-MM-DD HH24:MI:SS.FF3"
+  trim_text: true
+  column_order: declared
+
+target:
+  layer: dimension
+  name: dim_customer
+  schema: mart
+  description: >
+    Conformed customer dimension integrated from three systems, each with its own
+    identifier and its own update cadence.
+
+    The retail customer who moves state and changes her name on marriage is the case this
+    model exists to survive. Type-2 versioning handles the attribute changes. The durable
+    key handles what Type-2 cannot: the source reissuing her identifier, or identity
+    resolution later discovering two records are one person.
+
+    Distinct customer counts use customer_durable_key. Counting distinct on customer_key
+    counts versions, so a customer who moved and married would count three times.
+  grain: [customer_durable_key, valid_from]
+  natural_key: [source_system, customer_id]
+  natural_key_stability: unstable
+  materialization: merge
+
+durable_key:
+  name: customer_durable_key
+  # This key genuinely wants crosswalk: an unstable natural key needs a durable id resolved
+  # through the persistent dim_customer_xref mapping so it survives reissues and spans
+  # systems. crosswalk is substituted today, though, because the emitter emits a dense_rank
+  # sequence, which is not durable across refreshes. Until the identity_crosswalk emitter
+  # exists, this declares sequence, which is what is actually produced, rather than claim a
+  # strategy the build cannot honor.
+  type: int
+  cardinality:
+    entities: 50000000
+  strategy: sequence
+  assignment: sequence
+  on_unknown: assign_new
+
+scd:
+  type: 2
+  derivation: attribute_timelines
+  surrogate_key:
+    name: customer_key
+    strategy: sequence
+    cardinality:
+      entities: 50000000
+      avg_versions: 6
+    type: int
+  effective_from: valid_from
+  effective_to: valid_to
+  bound: "[from, to)"
+  open_sentinel: "9999-12-31 00:00:00.000"
+  source_timestamp_promotion: start_of_day
+  on_duplicate_instant: error
+  current_flag: is_current
+  version_number: version_no
+  change_hash: record_hash
+  attribute_hash: attribute_hash
+  current_view:
+    generate: true
+    name: dim_customer_current
+  audit:
+    loaded_at: dw_load_ts
+    source_system: dw_source_system
+    tzdata_version: dw_tzdata_version
+  stable_columns: [customer_durable_key]
+  timelines:
+    - attribute: customer_name
+      source: crm
+      from: { rows: true }
+      effective_from: "crm.updated_at"
+      value: "crm.full_name"
+      before_first: unknown
+    - attribute: customer_name
+      source: mf
+      from: { rows: true }
+      effective_from: "mf.chg_ts"
+      value: "mf.party_name"
+      before_first: unknown
+    - attribute: mailing_state
+      source: bil
+      from: { rows: true }
+      effective_from: "bil.updated_at"
+      value: "bil.state_cd"
+      before_first: unknown
+    - attribute: email_address
+      source: web
+      from: { rows: true }
+      effective_from: "web.profile_updated_at"
+      value: "web.email"
+      before_first: "null"
+
+survivorship:
+  default: source_precedence
+  precedence: [crm, bil, mf, web]
+  record_conflicts: true
+  rules:
+    - column: customer_name
+      strategy: source_precedence
+      precedence: [crm, mf, bil]
+    - column: email_address
+      strategy: source_precedence
+      precedence: [web, crm]
+    - column: mailing_state
+      strategy: specific_source
+      source: bil
+
+contribution_lineage:
+  mode: side_table
+  materialize_inline: [mailing_state, customer_name]
+
+late_arrival:
+  mode: retroactive_insert
+  affected_facts: report
+  dedupe_on_change_hash: true
+  max_backdating: P2Y
+  on_late_source: forward_only
+
+mini_dimensions:
+  - name: dim_customer_demographics
+    columns: [age_band, income_band, credit_score_band]
+    banding_required: true
+    bands:
+      - { column: age_band,          from: "crm.age" }
+      - { column: income_band,       from: "crm.annual_income" }
+      - { column: credit_score_band, from: "bil.credit_score" }
+    outrigger:
+      current_key_column: current_demographics_key
+
+sources:
+  - alias: crm
+    kind: table
+    system: crm
+    platform: oracle
+    schema: crm_app
+    table: customers
+    source_zone: "America/New_York"
+    update_timestamp: "crm.updated_at"
+
+  - alias: bil
+    kind: table
+    system: billing
+    platform: db2_zos
+    schema: bill
+    table: account_party
+    source_zone: "UTC"
+    update_timestamp: "bil.updated_at"
+    join:
+      type: full
+      condition: "crm.customer_id = bil.party_id"
+
+  - alias: mf
+    kind: table
+    system: mainframe
+    platform: db2_zos
+    schema: legacy
+    table: party_master
+    source_zone: "America/New_York"
+    update_timestamp: "mf.chg_ts"
+    join:
+      type: full
+      condition: "crm.customer_id = mf.party_id"
+
+  - alias: web
+    kind: json
+    system: web
+    transport: kafka
+    serialization: json
+    topic: customer.profile.v3
+    source_zone: "UTC"
+    update_timestamp: "web.profile_updated_at"
+    landing: native_read
+    root: "$.profiles[*]"
+    projection:
+      - { name: user_uuid,            path: "$.userId",            type: varchar(36) }
+      - { name: email,                path: "$.contact.email",     type: varchar(320) }
+      - { name: phone_raw,            path: "$.contact.phone",     type: varchar(40) }
+      - { name: profile_updated_at,   path: "$.updatedAt",         type: varchar(30) }
+      - { name: lifetime_value_txt,   path: "$.ltv",               type: varchar(40), as_text: true }
+
+columns:
+  - name: source_system
+    type: varchar(20)
+    nullable: false
+    role: natural_key
+    scd_behavior: { type: 2 }
+    description: >
+      The system whose identifier survived. Materialized because the natural key names it:
+      two customers sharing an id across systems are different people, so the pair is the
+      key. Tracked like the id it qualifies, since the unstable key means both can move.
+    transform:
+      kind: survived
+      candidates:
+        - { source: crm, expression: "'crm'" }
+        - { source: bil, expression: "'billing'" }
+        - { source: mf,  expression: "'mainframe'" }
+
+  - name: customer_id
+    type: varchar(20)
+    nullable: false
+    role: natural_key
+    scd_behavior: { type: 2 }
+    description: >
+      Tracked rather than overwritten because the natural key is unstable. Keeping it in the
+      version history is what lets someone search by the identifier she had before the move.
+    transform:
+      kind: survived
+      candidates:
+        - { source: crm, expression: "crm.customer_id" }
+        - { source: bil, expression: "bil.party_id" }
+        - { source: mf,  expression: "mf.party_id" }
+
+  - name: customer_name
+    type: varchar(200)
+    scd_behavior: { type: 2 }
+    transform:
+      kind: survived
+      candidates:
+        - { source: crm, expression: "crm.full_name" }
+        - { source: mf,  expression: "mf.party_name" }
+        - { source: bil, expression: "bil.party_name" }
+
+  - name: mailing_state
+    type: varchar(2)
+    scd_behavior: { type: 2 }
+    allowed_values: [AL, AK, AZ, AR, CA, CO, CT, DE, FL, GA, TX, NY, NJ, PA, IL, WA, OR, MA]
+    transform:
+      kind: survived
+      candidates:
+        - { source: bil, expression: "bil.state_cd" }
+        - { source: crm, expression: "crm.state" }
+
+  - name: email_address
+    type: varchar(320)
+    scd_behavior: { type: 1 }
+    description: Type 1 inside a Type 2. A corrected email is not a new version of the customer.
+    transform:
+      kind: survived
+      candidates:
+        - { source: web, expression: "web.email" }
+        - { source: crm, expression: "crm.email" }
+
+  - name: phone_number
+    type: varchar(20)
+    scd_behavior: { type: 1 }
+    transform:
+      kind: cast
+      source: "web.phone_raw"
+      to: varchar(20)
+      trim: true
+      on_error: "null"
+
+  - name: lifetime_value
+    type: numeric(18,4)
+    scd_behavior: { type: 1 }
+    description: >
+      Carried as text across the JSON hop. A decimal of this precision landed as a JSON
+      number would be an IEEE 754 double and would lose digits silently, so the projection
+      declares as_text and the conversion happens here where it is visible.
+    transform:
+      kind: cast
+      source: "web.lifetime_value_txt"
+      to: numeric(18,4)
+      rounding: half_up
+      on_error: "null"
+
+  - name: customer_segment
+    type: varchar(20)
+    scd_behavior: { type: 2 }
+    transform:
+      kind: unresolved
+      note: >
+        Segment is assigned by the marketing scoring process, which runs weekly against a
+        model output table nobody could name during mapping. Needs the source identified
+        and the effective date of each reassignment.
+      raised_by: "import:crm_mapping_sheet_row_214"
+      owner: "marketing data steward"
+
+  # --- Kimball type 0: set once at insert, never updated, not even by a correction.
+  - name: original_acquisition_channel
+    type: varchar(20)
+    scd_behavior:
+      type: 0
+      paired_with: acquisition_channel
+    description: >
+      The channel she arrived through. Pairs with the live column beside it, which is the
+      pattern that makes type 0 useful. The generator emits an immutability assertion,
+      because a type 0 column drifting is silent until somebody reconciles an acquisition
+      report two years later.
+    transform:
+      kind: direct
+      source: "crm.acquisition_channel"
+
+  - name: acquisition_channel
+    type: varchar(20)
+    scd_behavior: { type: 2 }
+    transform:
+      kind: direct
+      source: "crm.acquisition_channel"
+
+  # --- Kimball type 3: bounded, lossy, and that is the point. Alternate reality
+  #     reporting after a realignment, not general history.
+  - name: sales_region
+    type: varchar(30)
+    scd_behavior:
+      type: 3
+      depth: 1
+      prior_columns: [prior_sales_region]
+      change_date_column: sales_region_changed_at
+    description: >
+      Regions get redrawn and leadership wants this year reported under both the old and
+      the new rollup for a while. Type 2 cannot answer that in one pass.
+    transform:
+      kind: direct
+      source: "crm.sales_region"
+
+  # --- Kimball type 6, taken as a view rather than materialized. The fact already carries
+  #     the durable key, so as-is costs one ordinary join to dim_customer_current, not a
+  #     self join and not a current_ column rewritten across every version row.
+  - name: loyalty_tier
+    type: varchar(20)
+    scd_behavior:
+      type: 6
+      current_access: view
+    allowed_values: [BRONZE, SILVER, GOLD, PLATINUM]
+    transform:
+      kind: direct
+      source: "crm.loyalty_tier"
+
+  # --- The one case where materializing still wins: a flat file extract that cannot join.
+  - name: service_tier
+    type: varchar(20)
+    scd_behavior:
+      type: 6
+      current_access: materialized
+      current_column: current_service_tier
+      reason: "nightly flat file extract to the servicing platform, which cannot join"
+    transform:
+      kind: direct
+      source: "crm.service_tier"
+
+  # --- Type 4 members. Banded on purpose: a mini dimension carrying raw numerics has
+  #     cardinality equal to the product of every distinct value and defeats itself.
+  - name: age_band
+    type: varchar(12)
+    scd_behavior: { type: 1 }
+    allowed_values: ["18-24", "25-34", "35-44", "45-54", "55-64", "65+"]
+    transform:
+      kind: unresolved
+      note: "Banding thresholds not agreed during mapping. Marketing and risk proposed different cuts."
+      raised_by: "import:crm_mapping_sheet_row_221"
+      owner: "marketing data steward"
+
+  - name: income_band
+    type: varchar(12)
+    scd_behavior: { type: 1 }
+    transform:
+      kind: unresolved
+      note: "Same open question as age_band."
+      raised_by: "import:crm_mapping_sheet_row_222"
+      owner: "marketing data steward"
+
+  - name: credit_score_band
+    type: varchar(12)
+    scd_behavior: { type: 1 }
+    transform:
+      kind: unresolved
+      note: "Band boundaries must come from risk, not be invented here."
+      raised_by: "import:crm_mapping_sheet_row_223"
+      owner: "risk reference data"

@@ -1,0 +1,190 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+  timestamp_policy:
+    storage: utc_instant
+    retain_source_zone: true
+    zone_representation: iana_zone_id
+    tzdata_version: "2026a"
+    ambiguous_local: error
+    nonexistent_local: error
+
+target:
+  layer: staging
+  name: stg_orders
+  schema: staging
+  description: >
+    A staging model is almost entirely casts, which is the reason cast is its own transform
+    kind rather than a flavor of expression. None of this needs authored SQL, all of it
+    transpiles across dialects, and every one of these conversions is a place data goes
+    quietly missing.
+
+    The source is a nested order document exploded to line grain. After the projection it
+    looks like a flat table, so every column mapping below references a plain name and
+    never a JSON path. One vocabulary for shredding, one for mapping.
+  grain: [order_id, line_number]
+  materialization: view
+
+sources:
+  - alias: ord
+    kind: json
+    system: oms
+    transport: kafka
+    serialization: json
+    topic: orders.v4
+    source_zone: "UTC"
+    landing: native_read
+    root: "$.orders[*]"
+    explode:
+      - { alias: line, path: "$.lines[*]" }
+    projection:
+      - { name: order_id,          path: "$.orderId",              type: varchar(36) }
+      - { name: customer_id,       path: "$.customer.id",          type: varchar(20) }
+      - { name: src_system,        path: "$.sourceSystem",         type: varchar(20) }
+      - { name: placed_at_txt,     path: "$.placedAt",             type: varchar(30) }
+      - { name: status_code_txt,   path: "$.status",               type: varchar(10) }
+      - { name: channel_code_txt,  path: "$.channelCode",          type: varchar(4) }
+      - { name: line_number_txt,   path: "line.$.lineNo",          type: varchar(10) }
+      - { name: sku,               path: "line.$.sku",             type: varchar(40) }
+      - { name: quantity_txt,      path: "line.$.qty",             type: varchar(20) }
+      - { name: unit_price_txt,    path: "line.$.price.amount",    type: varchar(40), as_text: true }
+      - { name: discount_txt,      path: "line.$.discount.amount", type: varchar(40), as_text: true }
+      - { name: currency_code,     path: "line.$.price.currency",  type: varchar(3) }
+
+filters:
+  - "ord.status_code_txt <> 'CANCELLED'"
+
+columns:
+  - name: order_id
+    type: varchar(36)
+    nullable: false
+    role: primary_key
+    transform:
+      kind: direct
+      source: "ord.order_id"
+
+  - name: line_number
+    type: integer
+    nullable: false
+    role: primary_key
+    transform:
+      kind: cast
+      source: "ord.line_number_txt"
+      to: integer
+      trim: true
+      on_error: error
+
+  - name: customer_id
+    type: varchar(20)
+    nullable: false
+    transform:
+      kind: direct
+      source: "ord.customer_id"
+
+  - name: source_system
+    type: varchar(20)
+    nullable: false
+    transform:
+      kind: direct
+      source: "ord.src_system"
+
+  - name: placed_at_utc
+    type: timestamp(3)
+    nullable: false
+    description: >
+      The format mask carries fractional seconds explicitly. A mask of YYYY-MM-DD HH24:MI:SS
+      under a millisecond target is capability-clean and configuration-broken, which the
+      validator reports as a warning rather than an error.
+    transform:
+      kind: cast
+      source: "ord.placed_at_txt"
+      to: timestamp(3)
+      format: "YYYY-MM-DD\"T\"HH24:MI:SS.FF3"
+      from_zone: "UTC"
+      on_error: error
+
+  - name: sku
+    type: varchar(40)
+    nullable: false
+    transform:
+      kind: cast
+      source: "ord.sku"
+      to: varchar(40)
+      trim: true
+      on_error: error
+
+  - name: quantity
+    type: numeric(12,3)
+    nullable: false
+    transform:
+      kind: cast
+      source: "ord.quantity_txt"
+      to: numeric(12,3)
+      rounding: half_up
+      on_error: error
+
+  - name: unit_price
+    type: numeric(18,6)
+    nullable: false
+    description: Declared as_text on the projection so the value does not cross the JSON hop as a double.
+    transform:
+      kind: cast
+      source: "ord.unit_price_txt"
+      to: numeric(18,6)
+      rounding: half_even
+      on_error: error
+
+  - name: discount_amount
+    type: numeric(18,6)
+    nullable: true
+    transform:
+      kind: cast
+      source: "ord.discount_txt"
+      to: numeric(18,6)
+      rounding: half_even
+      on_error: "null"
+
+  - name: currency_code
+    type: varchar(3)
+    nullable: false
+    allowed_values: [USD, EUR, GBP, JPY, AUD, HKD, CAD, CHF]
+    transform:
+      kind: cast
+      source: "ord.currency_code"
+      to: varchar(3)
+      trim: true
+      on_error: error
+
+  - name: net_amount
+    type: numeric(18,6)
+    nullable: false
+    role: measure
+    additivity: additive
+    transform:
+      kind: expression
+      sql: "cast(ord.quantity_txt as numeric(12,3)) * cast(ord.unit_price_txt as numeric(18,6)) - coalesce(cast(ord.discount_txt as numeric(18,6)), 0)"
+
+  - name: order_channel
+    type: varchar(20)
+    nullable: true
+    allowed_values: [WEB, STORE, PHONE, PARTNER, UNKNOWN]
+    transform:
+      kind: conditional
+      cases:
+        - { when: "ord.channel_code_txt = '1'", then: "'WEB'" }
+        - { when: "ord.channel_code_txt = '2'", then: "'STORE'" }
+        - { when: "ord.channel_code_txt = '3'", then: "'PHONE'" }
+        - { when: "ord.channel_code_txt = '4'", then: "'PARTNER'" }
+      else: "'UNKNOWN'"
+
+  - name: fulfillment_sla_breached
+    type: boolean
+    nullable: true
+    transform:
+      kind: unresolved
+      note: >
+        Flag orders that missed the promised ship window. The promise date is not in this
+        payload and the mapping sheet pointed at a field that does not exist in v4.
+      raised_by: "import:oms_mapping_sheet_row_118"
+      owner: "fulfillment product owner"

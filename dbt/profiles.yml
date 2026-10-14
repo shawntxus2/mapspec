@@ -1,0 +1,9 @@
+# Kept in the repo rather than ~/.dbt so the project is self-contained.
+# Every dbt command passes --profiles-dir . (the Makefile does this for you).
+mapspec:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: ../warehouse.duckdb
+      threads: 4

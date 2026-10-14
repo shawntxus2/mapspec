@@ -1,0 +1,374 @@
+<title>mapspec lineage review</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3-sankey/0.12.3/d3-sankey.min.js"></script>
+<style>
+/* Layout: a full-width lineage canvas with a coverage rail beside it, detail below.
+   Stacks to one column at phone width. */
+:root {
+  --surface:      #fbfbfc;
+  --panel:        #f3f4f7;
+  --panel-2:      #e9ebf0;
+  --rule:         #d6d9e0;
+  --ink:          #15171b;
+  --ink-2:        #4d5260;
+  --ink-3:        #767c8c;
+  --accent:       #2a78d6;
+
+  /* categorical, validated all-pairs light on this surface. Every chip is also
+     text-labelled, which is the relief for the two sub-3:1 slots. */
+  --k-direct:     #1baf7a;
+  --k-computed:   #2a78d6;
+  --k-resolved:   #eda100;
+  --k-open:       #d03b3b;   /* status critical, reserved, never a category */
+
+  --node-source:  #767c8c;
+  --node-staging: #5b7fa6;
+  --node-dim:     #2a78d6;
+  --node-fact:    #1f5a9e;
+  --shadow:       0 1px 2px rgba(21,23,27,.06), 0 6px 20px rgba(21,23,27,.05);
+
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface: #15171b; --panel: #1c1f25; --panel-2: #242830; --rule: #333945;
+    --ink: #e8eaee; --ink-2: #a8aeba; --ink-3: #7b8292; --accent: #3987e5;
+    --k-direct: #199e70; --k-computed: #3987e5; --k-resolved: #c98500; --k-open: #d03b3b;
+    --node-source: #7b8292; --node-staging: #5b7fa6; --node-dim: #3987e5; --node-fact: #8fb6e8;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.28);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #15171b; --panel: #1c1f25; --panel-2: #242830; --rule: #333945;
+  --ink: #e8eaee; --ink-2: #a8aeba; --ink-3: #7b8292; --accent: #3987e5;
+  --k-direct: #199e70; --k-computed: #3987e5; --k-resolved: #c98500; --k-open: #d03b3b;
+  --node-source: #7b8292; --node-staging: #5b7fa6; --node-dim: #3987e5; --node-fact: #8fb6e8;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.28);
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--surface); color: var(--ink);
+  font-family: var(--sans); font-size: 15px; line-height: 1.5;
+  padding-block: 28px 56px; padding-inline: max(16px, 3vw);
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+
+/* header */
+header { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: flex-end; justify-content: space-between; }
+h1 { margin: 0; font-size: clamp(22px, 3.2vw, 30px); font-weight: 600; letter-spacing: -0.02em; text-wrap: balance; }
+h1 .dim { color: var(--ink-3); font-weight: 400; }
+.sub { margin: 4px 0 0; color: var(--ink-2); font-size: 14px; max-width: 62ch; }
+.stamp { font-family: var(--mono); font-size: 12px; color: var(--ink-3); white-space: nowrap; }
+
+/* coverage */
+.cover { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px;
+         background: var(--rule); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.cell { background: var(--panel); padding: 14px 16px; min-width: 0; }
+.cell .lab { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+.cell .val { font-family: var(--mono); font-size: 26px; font-weight: 600; margin-top: 2px;
+             font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.cell .val.open { color: var(--k-open); }
+.cell .note { font-size: 12px; color: var(--ink-3); margin-top: 1px; }
+
+/* kind bar */
+.kindbar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--panel-2); gap: 2px; }
+.kindbar span { display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 13px; color: var(--ink-2); }
+.legend b { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: var(--ink); }
+.sw { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+
+/* canvas */
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 12px; box-shadow: var(--shadow); }
+.panel > .head { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: baseline; justify-content: space-between;
+                 padding: 13px 18px; border-bottom: 1px solid var(--rule); }
+.panel > .head h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.panel > .head .hint { font-size: 12.5px; color: var(--ink-3); }
+.canvas { overflow-x: auto; padding: 10px 6px 4px; }
+svg { display: block; }
+.node rect { cursor: pointer; }
+.node text { font-family: var(--sans); font-size: 11.5px; fill: var(--ink); pointer-events: none; }
+.node .meta { font-family: var(--mono); font-size: 10px; fill: var(--ink-3); }
+.link { fill: none; cursor: pointer; transition: stroke-opacity .12s; }
+.link:hover { stroke-opacity: .72 !important; }
+.link.sel { stroke-opacity: .85 !important; }
+.axis { font-family: var(--mono); font-size: 10px; fill: var(--ink-3); letter-spacing: .08em; text-transform: uppercase; }
+
+/* detail */
+.detail { padding: 0; }
+.dhead { padding: 14px 18px 10px; border-bottom: 1px solid var(--rule); }
+.dhead .path { font-family: var(--mono); font-size: 13px; color: var(--ink); word-break: break-word; }
+.dhead .path .arrow { color: var(--ink-3); padding: 0 6px; }
+.dhead .cnt { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+th { text-align: left; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
+     font-weight: 600; padding: 9px 18px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+td { padding: 9px 18px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td.col { font-family: var(--mono); font-weight: 500; white-space: nowrap; }
+td.typ { font-family: var(--mono); color: var(--ink-3); font-size: 12.5px; white-space: nowrap; }
+td.expr { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); word-break: break-word; min-width: 0; }
+td.expr .note { color: var(--k-open); }
+td.expr .owner { color: var(--ink-3); font-family: var(--sans); font-size: 12px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--sans); font-size: 12px;
+        font-weight: 500; white-space: nowrap; }
+.tablewrap { overflow-x: auto; }
+.empty { padding: 26px 18px; color: var(--ink-3); font-size: 14px; }
+
+/* open items */
+.open-list { display: grid; gap: 1px; background: var(--rule); }
+.open-row { background: var(--panel); padding: 11px 18px; display: flex; gap: 14px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+.open-row .m { font-family: var(--mono); font-size: 13px; }
+.open-row .n { font-family: var(--mono); font-size: 13px; color: var(--k-open); font-variant-numeric: tabular-nums; }
+
+footer { color: var(--ink-3); font-size: 12.5px; border-top: 1px solid var(--rule); padding-top: 14px; }
+footer code { font-family: var(--mono); color: var(--ink-2); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>Lineage review <span class="dim">/ <span id="proj">mapspec</span></span></h1>
+      <p class="sub">Entity level, because a column-level diagram is unreadable past about thirty flows.
+        Ribbon width is the number of column mappings carried. Click a ribbon for the columns behind it.</p>
+    </div>
+    <div class="stamp" id="stamp"></div>
+  </header>
+
+  <section class="cover" id="cover"></section>
+
+  <div class="legend" id="legend"></div>
+
+  <section class="panel">
+    <div class="head">
+      <h2>Sources to models</h2>
+      <span class="hint">A ribbon carrying unresolved columns is drawn in the open colour.</span>
+    </div>
+    <div class="canvas" id="canvas"></div>
+  </section>
+
+  <section class="panel detail">
+    <div class="dhead">
+      <div class="path" id="dpath">Nothing selected</div>
+      <div class="cnt" id="dcnt">Click a ribbon or a box in the diagram.</div>
+    </div>
+    <div id="dbody"><div class="empty">The column grid appears here.</div></div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <h2>Open items</h2>
+      <span class="hint">Columns the generator will not write. It reports them rather than guessing.</span>
+    </div>
+    <div class="open-list" id="openlist"></div>
+  </section>
+
+  <footer>
+    Generated by <code>mapspec graph</code>. This is a Sankey-shaped lineage diagram, not a true Sankey:
+    flow is not conserved, because one source column can feed several targets and a target column can have
+    no source at all.
+  </footer>
+</div>
+
+<script type="application/json" id="graph-data">__GRAPH_JSON__</script>
+<script>
+(function () {
+  const G = JSON.parse(document.getElementById('graph-data').textContent);
+  const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+  // Nine transform kinds, three families plus one status. The exact kind is always
+  // written out beside the swatch, so identity never rests on colour alone.
+  const FAMILY = {
+    direct:     ['Direct move', '--k-direct'],
+    cast:       ['Computed',    '--k-computed'],
+    expression: ['Computed',    '--k-computed'],
+    conditional:['Computed',    '--k-computed'],
+    aggregate:  ['Computed',    '--k-computed'],
+    constant:   ['Computed',    '--k-computed'],
+    lookup:     ['Resolved',    '--k-resolved'],
+    survived:   ['Resolved',    '--k-resolved'],
+    timeline:   ['Resolved',    '--k-resolved'],
+    durable_key:['Resolved',    '--k-resolved'],
+    unresolved: ['Unresolved',  '--k-open']
+  };
+  const famOf = k => (FAMILY[k] || ['Computed', '--k-computed']);
+  const NODECOL = { source: '--node-source', staging: '--node-staging', crosswalk: '--node-dim',
+                    dimension: '--node-dim', bridge: '--node-dim', fact: '--node-fact' };
+
+  document.getElementById('proj').textContent = G.project;
+  document.getElementById('stamp').textContent = G.generated_at.replace('T', ' ').replace('+00:00', ' UTC');
+
+  /* ---- coverage ---- */
+  const t = G.totals;
+  const models = G.nodes.filter(n => n.kind === 'model' || n.kind === 'generated');
+  const sources = G.nodes.filter(n => n.kind === 'source');
+  document.getElementById('cover').innerHTML = [
+    ['Generatable', t.generatable_pct + '%', (t.columns - t.unresolved) + ' of ' + t.columns + ' columns', false],
+    ['Unresolved', t.unresolved, 'reported, never guessed', true],
+    ['Models', models.length, models.filter(m => m.generated_kind).length + ' generated'],
+    ['Sources', sources.length, G.orphan_sources.length ? G.orphan_sources.length + ' consumed by nothing' : 'all consumed'],
+    ['Links', G.links.length, 'source to model edges']
+  ].map(([lab, val, note, open]) =>
+    `<div class="cell"><div class="lab">${lab}</div><div class="val${open ? ' open' : ''}">${val}</div><div class="note">${note}</div></div>`
+  ).join('');
+
+  /* ---- legend + kind bar ---- */
+  const kindTotal = Object.values(G.by_kind).reduce((a, b) => a + b, 0);
+  const famOrder = ['Direct move', 'Computed', 'Resolved', 'Unresolved'];
+  const famCounts = {};
+  Object.entries(G.by_kind).forEach(([k, v]) => {
+    const f = famOf(k)[0]; famCounts[f] = (famCounts[f] || 0) + v;
+  });
+  const kindsByFam = {};
+  Object.keys(G.by_kind).forEach(k => {
+    const f = famOf(k)[0]; (kindsByFam[f] = kindsByFam[f] || []).push(k);
+  });
+  document.getElementById('legend').innerHTML =
+    `<div class="kindbar" style="flex:1 1 220px;min-width:180px">` +
+    famOrder.filter(f => famCounts[f]).map(f => {
+      const col = css(famOf(kindsByFam[f][0])[1]);
+      return `<span style="flex:${famCounts[f]};background:${col}" title="${f}: ${famCounts[f]}"></span>`;
+    }).join('') + `</div>` +
+    famOrder.filter(f => famCounts[f]).map(f => {
+      const col = css(famOf(kindsByFam[f][0])[1]);
+      return `<b><span class="sw" style="background:${col}"></span>${f} <span style="color:var(--ink-3);font-weight:400">` +
+             `${famCounts[f]} &middot; ${kindsByFam[f].sort().join(', ')}</span></b>`;
+    }).join('');
+
+  /* ---- sankey ---- */
+  const nodes = G.nodes.map(d => Object.assign({}, d));
+  const links = G.links.map(d => Object.assign({}, d));
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const W = Math.max(760, Math.min(1180, (document.getElementById('canvas').clientWidth || 980) - 12));
+  const H = Math.max(340, nodes.length * 30);
+  const PADL = 8, PADR = 8, TOP = 24;
+
+  const sankey = d3.sankey()
+    .nodeId(d => d.id)
+    .nodeWidth(13)
+    .nodePadding(20)
+    .nodeAlign(d3.sankeyLeft)
+    .extent([[PADL, TOP], [W - PADR, H - 8]]);
+  const graph = sankey({ nodes, links });
+
+  const svg = d3.select('#canvas').append('svg')
+    .attr('width', W).attr('height', H)
+    .attr('viewBox', `0 0 ${W} ${H}`)
+    .attr('role', 'img')
+    .attr('aria-label', 'Lineage from sources through staging to dimensions and facts');
+
+  // depth labels along the top
+  const byDepth = d3.group(graph.nodes, d => d.depth);
+  const DEPTHLAB = ['source', 'staging', 'crosswalk', 'dimension', 'fact'];
+  byDepth.forEach((ns, d) => {
+    const x = d3.min(ns, n => n.x0);
+    svg.append('text').attr('class', 'axis').attr('x', x).attr('y', 13)
+       .text(DEPTHLAB[d] || ('layer ' + d));
+  });
+
+  const linkG = svg.append('g').attr('fill', 'none');
+  const path = linkG.selectAll('path').data(graph.links).join('path')
+    .attr('class', 'link')
+    .attr('d', d3.sankeyLinkHorizontal())
+    .attr('stroke', d => d.columns.some(c => c.kind === 'unresolved') ? css('--k-open') : css('--accent'))
+    .attr('stroke-opacity', d => d.columns.some(c => c.kind === 'unresolved') ? .42 : .26)
+    .attr('stroke-width', d => Math.max(2, d.width))
+    .on('click', (e, d) => selectLink(d));
+  path.append('title').text(d =>
+    `${byId.get(d.source.id).label} -> ${byId.get(d.target.id).label}\n${d.value} column mapping${d.value === 1 ? '' : 's'}`);
+
+  const nodeG = svg.append('g').selectAll('g').data(graph.nodes).join('g').attr('class', 'node');
+  nodeG.append('rect')
+    .attr('x', d => d.x0).attr('y', d => d.y0)
+    .attr('width', d => d.x1 - d.x0)
+    .attr('height', d => Math.max(3, d.y1 - d.y0))
+    .attr('rx', 3)
+    .attr('fill', d => css(NODECOL[d.layer] || '--node-dim'))
+    .on('click', (e, d) => selectNode(d))
+    .append('title').text(d => d.kind === 'source'
+      ? `${d.label}\n${d.source_kind || 'table'}${d.platform ? ' on ' + d.platform : ''}${d.transport && d.transport !== 'none' ? ' via ' + d.transport : ''}`
+      : `${d.label}\n${d.columns} columns, ${d.generatable_pct}% generatable`);
+
+  // One line per node. A node with no links is only a few pixels tall, so a second
+  // stacked line lands on top of the next node's label.
+  const label = nodeG.append('text')
+    .attr('x', d => d.x0 < W / 2 ? d.x1 + 7 : d.x0 - 7)
+    .attr('y', d => (d.y1 + d.y0) / 2)
+    .attr('text-anchor', d => d.x0 < W / 2 ? 'start' : 'end')
+    .attr('dy', '0.32em');
+  label.append('tspan').text(d => d.label);
+  label.filter(d => d.kind !== 'source').append('tspan')
+    .attr('class', 'meta')
+    .attr('dx', 7)
+    .text(d => d.generated_kind ? 'generated' : `${d.generatable_pct}% of ${d.columns}`);
+
+  /* ---- detail ---- */
+  const dpath = document.getElementById('dpath'), dcnt = document.getElementById('dcnt'), dbody = document.getElementById('dbody');
+
+  function chip(kind) {
+    const [fam, tok] = famOf(kind);
+    return `<span class="chip"><span class="sw" style="background:${css(tok)}"></span>${kind}</span>`;
+  }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+
+  function renderColumns(cols) {
+    if (!cols.length) { dbody.innerHTML = '<div class="empty">No column mappings on this edge.</div>'; return; }
+    const rows = cols.map(c => {
+      const detail = c.kind === 'unresolved'
+        ? `<span class="note">${esc(c.note)}</span>` + (c.owner ? `<br><span class="owner">owner: ${esc(c.owner)}</span>` : '')
+        : esc(c.expr || '');
+      return `<tr><td class="col">${esc(c.name)}</td><td class="typ">${esc(c.type || '')}</td>
+              <td>${chip(c.kind)}</td><td class="expr">${detail}</td></tr>`;
+    }).join('');
+    dbody.innerHTML = `<div class="tablewrap"><table>
+      <thead><tr><th>Column</th><th>Type</th><th>Transform</th><th>Source expression</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }
+
+  function selectLink(d) {
+    path.classed('sel', p => p === d);
+    dpath.innerHTML = `${esc(byId.get(d.source.id).label)}<span class="arrow">&rarr;</span>${esc(byId.get(d.target.id).label)}`;
+    const open = d.columns.filter(c => c.kind === 'unresolved').length;
+    dcnt.textContent = `${d.value} column mapping${d.value === 1 ? '' : 's'}` + (open ? `, ${open} unresolved` : '');
+    renderColumns(d.columns);
+    document.querySelector('.detail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function selectNode(n) {
+    path.classed('sel', p => p.source.id === n.id || p.target.id === n.id);
+    const ins = graph.links.filter(l => l.target.id === n.id);
+    const cols = [].concat(...ins.map(l => l.columns));
+    dpath.innerHTML = esc(n.label);
+    if (n.kind === 'source') {
+      const bits = [n.source_kind, n.platform && 'on ' + n.platform, n.transport && n.transport !== 'none' && 'via ' + n.transport,
+                    n.serialization && n.serialization !== 'none' && n.serialization,
+                    n.projection ? n.projection + ' projected columns' : null].filter(Boolean);
+      dcnt.textContent = bits.join(' · ');
+      const outs = graph.links.filter(l => l.source.id === n.id);
+      renderColumns([].concat(...outs.map(l => l.columns)));
+    } else {
+      dcnt.textContent = n.generated_kind
+        ? `generated: ${n.generated_kind}. No mapping to review.`
+        : `${n.columns} columns, ${n.generatable_pct}% generatable, ${n.unresolved} unresolved · ${esc(n.description || '')}`;
+      renderColumns(cols);
+    }
+    document.querySelector('.detail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  /* ---- open items ---- */
+  document.getElementById('openlist').innerHTML = G.open_items.length
+    ? G.open_items.map(o => `<div class="open-row"><span class="m">${esc(o.model)}</span><span class="n">${o.count} unresolved</span></div>`).join('')
+    : '<div class="open-row"><span class="m">Nothing open.</span></div>';
+
+  // open on the heaviest edge so the page is complete at rest
+  const heaviest = graph.links.slice().sort((a, b) => b.value - a.value)[0];
+  if (heaviest) selectLink(heaviest);
+})();
+</script>

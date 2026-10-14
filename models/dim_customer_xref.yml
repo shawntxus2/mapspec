@@ -1,0 +1,24 @@
+spec_version: 1
+project:
+  name: reference_estate
+  target_platform: duckdb
+
+target:
+  layer: crosswalk
+  name: dim_customer_xref
+  schema: mart
+  description: >
+    Identity crosswalk. Maps every (source_system, natural_key) pair to one durable key,
+    with its own Type-2 history because a source can reassign an identifier. Durable keys
+    are ASSIGNED here, never hashed from a natural key, which is the whole point: the
+    natural key is the thing that changes. Merges set superseded_by_durable_key rather than
+    rewriting, so what the warehouse believed last quarter is still reproducible.
+
+    Populating this table is matching, and matching is out of scope. Deterministic rules,
+    probabilistic scoring and steward review belong to a different system. This tool
+    consumes the crosswalk and generates everything downstream of it.
+  grain: [source_system, source_natural_key, valid_from]
+  generated:
+    kind: identity_crosswalk
+    for: dim_customer
+    assignment: sequence

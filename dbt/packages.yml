@@ -1,0 +1,5 @@
+# dbt_utils supplies unique_combination_of_columns, which the emitter uses for the
+# Type 2 grain test (durable key plus effective_from).
+packages:
+  - package: dbt-labs/dbt_utils
+    version: 1.3.0

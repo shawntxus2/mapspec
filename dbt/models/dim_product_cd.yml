@@ -1,0 +1,27 @@
+version: 2
+models:
+- name: dim_product_cd
+  description: 'A product reference whose source carries no effective dates, only a batch date per snapshot.
+    Versions are derived by change detection over the Type 2 columns: a batch that repeats the same content
+    opens no version, a batch that changes a tracked attribute does. This is the default derivation and
+    the path most real sources take, and nothing tested it until now. derivation is omitted on purpose
+    so t'
+  columns:
+  - name: product_id
+    tests:
+    - not_null:
+        config:
+          where: product_key >= 0
+  - name: category
+    tests:
+    - accepted_values:
+        values:
+        - HARDWARE
+        - SOFTWARE
+        config:
+          where: product_key >= 0
+  tests:
+  - dbt_utils.unique_combination_of_columns:
+      combination_of_columns:
+      - product_durable_key
+      - valid_from

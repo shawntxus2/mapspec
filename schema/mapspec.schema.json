@@ -1,0 +1,2145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shawntxus2/mapspec/schema/mapspec.schema.json",
+  "title": "mapspec model specification",
+  "description": "Declarative source-to-target mapping for one target model. Validated before anything is generated.",
+  "type": "object",
+  "required": [
+    "spec_version",
+    "target"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "spec_version": {
+      "const": 1
+    },
+    "project": {
+      "$ref": "#/$defs/project"
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    },
+    "scd": {
+      "$ref": "#/$defs/scd"
+    },
+    "durable_key": {
+      "$ref": "#/$defs/durableKey"
+    },
+    "survivorship": {
+      "$ref": "#/$defs/survivorship"
+    },
+    "contribution_lineage": {
+      "$ref": "#/$defs/contributionLineage"
+    },
+    "late_arrival": {
+      "$ref": "#/$defs/lateArrival"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "filters": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "columns": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/column"
+      }
+    },
+    "column_groups": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/columnGroup"
+      }
+    },
+    "hash_policy": {
+      "$ref": "#/$defs/hashPolicy"
+    },
+    "mini_dimensions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/miniDimension"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "target": {
+            "properties": {
+              "layer": {
+                "const": "dimension"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": [
+              "scd"
+            ]
+          },
+          {
+            "properties": {
+              "target": {
+                "required": [
+                  "generated"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "comment": "A generated model declares no sources and no columns.",
+      "if": {
+        "properties": {
+          "target": {
+            "required": [
+              "generated"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "sources": {
+            "maxItems": 0
+          },
+          "columns": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "sqlExpression": {
+      "type": "string",
+      "minLength": 1
+    },
+    "keyExpressionList": {
+      "description": "One SQL expression, or an ordered list of them for a composite key. A bare string is treated as a one-element list.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sqlExpression"
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/sqlExpression"
+          }
+        }
+      ]
+    },
+    "timestampLiteral": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}$"
+    },
+    "ianaZone": {
+      "type": "string",
+      "pattern": "^[A-Za-z_]+/[A-Za-z_+\\-0-9/]+$|^UTC$"
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "target_platform": {
+          "$ref": "#/$defs/platformName"
+        },
+        "build_platforms": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/platformName" },
+          "minItems": 1,
+          "description": "Tier-1 platforms this spec is validated, emitted, built and compared on. Absent means every tier-1 platform. A spec that exercises a construct substituted on one platform but honored on another lists only the platforms that honor it, so the suite can keep coverage of the honored path without the substituted path failing the build. Not an emitter construct; build infrastructure."
+        },
+        "timestamp_policy": {
+          "$ref": "#/$defs/timestampPolicy"
+        },
+        "special_members": {
+          "$ref": "#/$defs/specialMembers"
+        }
+      }
+    },
+    "specialMembers": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Project-level registry of the keys a failed lookup resolves to. Declared once so a code means the same thing in every dimension. Absent means the defaults below.",
+      "default": {
+        "reserved_floor": -9,
+        "marker_column": "member_name",
+        "fill": {
+          "text": "label",
+          "numeric": "null",
+          "date": "null",
+          "timestamp": "null",
+          "boolean": "null"
+        },
+        "members": [
+          { "code": -1, "name": "unknown", "label": "Unknown" },
+          { "code": -2, "name": "not_applicable", "label": "Not Applicable" },
+          { "code": -3, "name": "not_yet_occurred", "label": "Not Yet Occurred" },
+          { "code": -4, "name": "invalid", "label": "Invalid" },
+          { "code": -5, "name": "not_provided", "label": "Not Provided" },
+          { "code": -6, "name": "no_version_at_date", "label": "No Version At Date" },
+          { "code": -7, "name": "multiple_matches", "label": "Multiple Matches" },
+          { "code": -8, "name": "rejected", "label": "Rejected" }
+        ]
+      },
+      "properties": {
+        "reserved_floor": {
+          "type": "integer",
+          "maximum": -1,
+          "default": -9,
+          "description": "Inclusive floor of the reserved band [reserved_floor, -1]. A member code may equal it. Sequences start at 1 and the sign keeps them clear, except under strategy: hash."
+        },
+        "marker_column": {
+          "$ref": "#/$defs/identifier",
+          "default": "member_name"
+        },
+        "fill": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "text": {
+              "type": "string",
+              "enum": ["label", "null"],
+              "default": "label"
+            },
+            "numeric": {
+              "type": "string",
+              "enum": ["null"],
+              "default": "null"
+            },
+            "date": {
+              "type": "string",
+              "enum": ["null"],
+              "default": "null"
+            },
+            "timestamp": {
+              "type": "string",
+              "enum": ["null"],
+              "default": "null"
+            },
+            "boolean": {
+              "type": "string",
+              "enum": ["null"],
+              "default": "null"
+            }
+          }
+        },
+        "members": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["code", "name"],
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "type": "integer",
+                "maximum": -1
+              },
+              "name": {
+                "$ref": "#/$defs/identifier"
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "platformName": {
+      "type": "string",
+      "enum": [
+        "snowflake",
+        "oracle",
+        "db2_zos",
+        "sqlserver",
+        "teradata",
+        "postgres",
+        "greenplum",
+        "duckdb",
+        "bigquery",
+        "redshift",
+        "mysql"
+      ]
+    },
+    "transport": {
+      "type": "string",
+      "enum": [
+        "kafka",
+        "ibm_mq",
+        "sftp",
+        "s3",
+        "https",
+        "none"
+      ]
+    },
+    "serialization": {
+      "type": "string",
+      "enum": [
+        "json",
+        "avro",
+        "protobuf",
+        "delimited",
+        "fixed_width",
+        "xml",
+        "none"
+      ]
+    },
+    "timestampPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Estate-wide temporal discipline. Effectivity is always timestamp(3) holding UTC.",
+      "properties": {
+        "storage": {
+          "type": "string",
+          "enum": [
+            "utc_instant"
+          ],
+          "default": "utc_instant"
+        },
+        "retain_source_zone": {
+          "type": "boolean",
+          "default": true
+        },
+        "zone_representation": {
+          "type": "string",
+          "enum": [
+            "iana_zone_id",
+            "utc_offset_minutes"
+          ],
+          "default": "iana_zone_id",
+          "description": "An offset reconstructs past intent exactly. Future-dated effectivity requires the zone id."
+        },
+        "tzdata_version": {
+          "type": "string"
+        },
+        "business_date": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "stored",
+                "derived"
+              ],
+              "default": "stored"
+            },
+            "calendar_zone": {
+              "$ref": "#/$defs/ianaZone"
+            },
+            "cutover": {
+              "type": "string",
+              "pattern": "^\\d{2}:\\d{2}$",
+              "default": "00:00"
+            }
+          }
+        },
+        "ambiguous_local": {
+          "type": "string",
+          "enum": [
+            "error",
+            "earlier",
+            "later"
+          ],
+          "default": "error"
+        },
+        "nonexistent_local": {
+          "type": "string",
+          "enum": [
+            "error",
+            "shift_forward",
+            "null"
+          ],
+          "default": "error"
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": [
+        "layer",
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "layer": {
+          "type": "string",
+          "enum": [
+            "staging",
+            "dimension",
+            "fact",
+            "bridge",
+            "crosswalk"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "platform": {
+          "$ref": "#/$defs/platformName"
+        },
+        "database": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "grain": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "natural_key": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "natural_key_stability": {
+          "type": "string",
+          "enum": [
+            "stable",
+            "unstable"
+          ],
+          "default": "stable",
+          "description": "unstable means the source identifier can change or be reassigned, which forces a crosswalk durable key."
+        },
+        "materialization": {
+          "type": "string",
+          "enum": [
+            "view",
+            "table",
+            "incremental",
+            "merge",
+            "snapshot"
+          ]
+        },
+        "incremental_key": {
+          "type": "string"
+        },
+        "as_of": {
+          "$ref": "#/$defs/sqlExpression",
+          "description": "Fact only. The single point-in-time column driving every Type-2 lookup in this model."
+        },
+        "as_of_promotion": {
+          "type": "string",
+          "enum": [
+            "start_of_day",
+            "end_of_day",
+            "none"
+          ],
+          "default": "none"
+        },
+        "generated": {
+          "$ref": "#/$defs/generated"
+        }
+      }
+    },
+    "generated": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "calendar"
+            },
+            "from": {
+              "type": "string",
+              "format": "date"
+            },
+            "to": {
+              "type": "string",
+              "format": "date"
+            },
+            "key": {
+              "type": "string",
+              "enum": [
+                "yyyymmdd_int",
+                "surrogate"
+              ],
+              "default": "yyyymmdd_int"
+            },
+            "calendars": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "gregorian",
+                  "iso_week",
+                  "fiscal_apr",
+                  "fiscal_jul",
+                  "fiscal_oct"
+                ]
+              }
+            },
+            "holiday_flags": {
+              "type": "boolean",
+              "default": false,
+              "description": "Must stay false in a multi-country estate. Holidays belong in dim_calendar_date."
+            }
+          },
+          "required": [
+            "kind",
+            "from",
+            "to"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "time_of_day"
+            },
+            "grain": {
+              "type": "string",
+              "enum": [
+                "second",
+                "minute"
+              ],
+              "default": "second"
+            },
+            "key": {
+              "type": "string",
+              "enum": [
+                "hhmmss_int",
+                "hhmm_int"
+              ],
+              "default": "hhmmss_int"
+            },
+            "bands": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "identity_crosswalk"
+            },
+            "for": {
+              "$ref": "#/$defs/identifier"
+            },
+            "assignment": {
+              "type": "string",
+              "enum": [
+                "sequence",
+                "uuid"
+              ],
+              "default": "sequence"
+            }
+          },
+          "required": [
+            "kind",
+            "for"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "model_signature_registry"
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "project"
+              ],
+              "default": "project"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "scd": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "integer",
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "derivation": {
+          "type": "string",
+          "enum": [
+            "change_detection",
+            "source_provided",
+            "attribute_timelines"
+          ],
+          "default": "change_detection"
+        },
+        "surrogate_key": {
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/identifier"
+            },
+            "strategy": {
+              "type": "string",
+              "enum": [
+                "sequence",
+                "hash"
+              ],
+              "default": "sequence",
+              "description": "sequence is the default. A point-in-time lookup joins the dimension anyway, so a computable key buys nothing. hash survives only for parallel assignment with no central sequence."
+            },
+            "hash_reason": {
+              "type": "string"
+            },
+            "hash_positivity": {
+              "type": "string",
+              "enum": [
+                "low_bits_offset",
+                "absolute"
+              ],
+              "description": "Required under strategy: hash. keyType is signed, so a hash cast into it lands negative about half the time and collides with the reserved band, producing a real row whose key is a member code. This declares how the value is forced positive. Not generated yet; nothing generates hash keys."
+            },
+            "cardinality": {
+              "$ref": "#/$defs/cardinality"
+            },
+            "type": {
+              "$ref": "#/$defs/keyType"
+            }
+          }
+        },
+        "effective_from": {
+          "$ref": "#/$defs/identifier"
+        },
+        "effective_to": {
+          "$ref": "#/$defs/identifier"
+        },
+        "bound": {
+          "const": "[from, to)",
+          "default": "[from, to)"
+        },
+        "open_sentinel": {
+          "$ref": "#/$defs/timestampLiteral",
+          "default": "9999-12-31 00:00:00.000"
+        },
+        "source_effective_from": {
+          "$ref": "#/$defs/sqlExpression"
+        },
+        "source_effective_to": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sqlExpression"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "derive": {
+                  "const": "lead"
+                }
+              },
+              "required": [
+                "derive"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "source_timestamp_promotion": {
+          "type": "string",
+          "enum": [
+            "start_of_day",
+            "end_of_day",
+            "none"
+          ],
+          "default": "start_of_day"
+        },
+        "on_duplicate_instant": {
+          "type": "string",
+          "enum": [
+            "error",
+            "last_by_source_order"
+          ],
+          "default": "error"
+        },
+        "current_flag": {
+          "$ref": "#/$defs/identifier"
+        },
+        "version_number": {
+          "$ref": "#/$defs/identifier"
+        },
+        "change_hash": {
+          "$ref": "#/$defs/identifier",
+          "description": "Hash over Type 2 columns only, computed AFTER survivorship. Decides whether to open a version. Including a Type 6 current column here re-versions the whole entity on every change."
+        },
+        "audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "loaded_at": {
+              "$ref": "#/$defs/identifier"
+            },
+            "source_system": {
+              "$ref": "#/$defs/identifier"
+            },
+            "tzdata_version": {
+              "$ref": "#/$defs/identifier"
+            }
+          }
+        },
+        "timelines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/timeline"
+          },
+          "minItems": 1
+        },
+        "stable_columns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "attribute_hash": {
+          "$ref": "#/$defs/identifier",
+          "description": "Hash over every column maintained in place (types 1, 3 current, 5 outrigger, 6 current). Decides whether to update."
+        },
+        "current_view": {
+          "$ref": "#/$defs/currentView"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "derivation": {
+                "const": "attribute_timelines"
+              }
+            },
+            "required": [
+              "derivation"
+            ]
+          },
+          "then": {
+            "required": [
+              "timelines"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "derivation": {
+                "const": "source_provided"
+              }
+            },
+            "required": [
+              "derivation"
+            ]
+          },
+          "then": {
+            "required": [
+              "source_effective_from"
+            ]
+          }
+        }
+      ]
+    },
+    "timeline": {
+      "type": "object",
+      "required": [
+        "attribute",
+        "from",
+        "effective_from"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "attribute": {
+          "$ref": "#/$defs/identifier"
+        },
+        "source": {
+          "type": "string",
+          "description": "Source alias. Two timelines may feed one attribute from different systems; survivorship resolves."
+        },
+        "from": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "explode": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "explode"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "unpivot": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "value",
+                      "effective_from"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "value": {
+                        "type": "string"
+                      },
+                      "effective_from": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "minItems": 1
+                }
+              },
+              "required": [
+                "unpivot"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rows": {
+                  "const": true
+                }
+              },
+              "required": [
+                "rows"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "effective_from": {
+          "type": "string"
+        },
+        "effective_to": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "before_first": {
+          "type": "string",
+          "enum": [
+            "null",
+            "unknown",
+            "carry_back"
+          ],
+          "description": "Required. There is no safe default for the span before an attribute's first known value."
+        },
+        "on_duplicate_instant": {
+          "type": "string",
+          "enum": [
+            "error",
+            "last_by_source_order"
+          ],
+          "default": "error"
+        }
+      }
+    },
+    "durableKey": {
+      "type": "object",
+      "required": [
+        "name",
+        "strategy"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "sequence",
+            "crosswalk",
+            "hash_natural_key"
+          ],
+          "description": "Required: say how the durable key is assigned, so the emitter is never silently handed a default. sequence is what the emitter emits, a dense_rank per entity. crosswalk resolves identity through a persistent mapping and hash_natural_key hashes the natural key; both are substituted today because the emitter emits a sequence, which is not durable across refreshes, so declaring either fails the build."
+        },
+        "crosswalk": {
+          "$ref": "#/$defs/identifier"
+        },
+        "assignment": {
+          "type": "string",
+          "enum": [
+            "sequence",
+            "uuid"
+          ],
+          "default": "sequence"
+        },
+        "on_unknown": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "default": "assign_new",
+          "description": "assign_new mints a durable key, error stops, any other value is a special member name resolved on the same terms as a lookup route."
+        },
+        "merge_policy": {
+          "type": "string",
+          "enum": [
+            "survivor_pointer",
+            "rewrite"
+          ],
+          "default": "survivor_pointer"
+        },
+        "type": {
+          "$ref": "#/$defs/keyType"
+        },
+        "cardinality": {
+          "$ref": "#/$defs/cardinality"
+        }
+      }
+    },
+    "survivorship": {
+      "type": "object",
+      "required": [
+        "default"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": "string",
+          "enum": [
+            "source_precedence",
+            "most_recent",
+            "most_complete"
+          ]
+        },
+        "precedence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/survivorshipRule"
+          }
+        },
+        "record_conflicts": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "survivorshipRule": {
+      "type": "object",
+      "required": [
+        "column",
+        "strategy"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "column": {
+          "$ref": "#/$defs/identifier"
+        },
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "source_precedence",
+            "most_recent",
+            "specific_source",
+            "most_complete",
+            "aggregate",
+            "manual"
+          ]
+        },
+        "precedence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "type": "string"
+        },
+        "function": {
+          "type": "string",
+          "enum": [
+            "sum",
+            "min",
+            "max",
+            "avg",
+            "count"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "strategy": {
+                "const": "specific_source"
+              }
+            },
+            "required": [
+              "strategy"
+            ]
+          },
+          "then": {
+            "required": [
+              "source"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "strategy": {
+                "const": "aggregate"
+              }
+            },
+            "required": [
+              "strategy"
+            ]
+          },
+          "then": {
+            "required": [
+              "function"
+            ]
+          }
+        }
+      ]
+    },
+    "contributionLineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "side_table",
+            "inline_columns",
+            "none"
+          ],
+          "default": "side_table"
+        },
+        "materialize_inline": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "lateArrival": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Data arriving with an effective instant inside an already closed interval.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "retroactive_insert",
+            "forward_only",
+            "error"
+          ],
+          "default": "retroactive_insert",
+          "description": "retroactive_insert shortens the preceding version's valid_to and inserts a new version. Surrogate keys of existing versions are unchanged because the hash is over effective_from."
+        },
+        "affected_facts": {
+          "type": "string",
+          "enum": [
+            "report",
+            "restate",
+            "ignore"
+          ],
+          "default": "report",
+          "description": "Facts loaded in the window the new version now covers point at the superseded version."
+        },
+        "dedupe_on_change_hash": {
+          "type": "boolean",
+          "default": true
+        },
+        "max_backdating": {
+          "type": "string",
+          "pattern": "^P(\\d+Y)?(\\d+M)?(\\d+D)?$",
+          "description": "ISO 8601 duration. An arrival older than this is rejected rather than silently rewriting history."
+        },
+        "on_late_source": {
+          "type": "string",
+          "enum": [
+            "forward_only",
+            "rebuild_history"
+          ],
+          "default": "forward_only"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "alias",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "alias": {
+          "$ref": "#/$defs/identifier"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "table",
+            "delimited",
+            "fixed_width",
+            "json",
+            "xml",
+            "model"
+          ]
+        },
+        "system": {
+          "type": "string"
+        },
+        "platform": {
+          "$ref": "#/$defs/platformName"
+        },
+        "transport": {
+          "$ref": "#/$defs/transport"
+        },
+        "serialization": {
+          "$ref": "#/$defs/serialization"
+        },
+        "source_zone": {
+          "$ref": "#/$defs/ianaZone"
+        },
+        "update_timestamp": {
+          "type": "string",
+          "description": "Required when any survivorship rule uses most_recent."
+        },
+        "schema": {
+          "type": "string"
+        },
+        "table": {
+          "type": "string"
+        },
+        "ref": {
+          "$ref": "#/$defs/identifier"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "topic": {
+          "type": "string"
+        },
+        "delimiter": {
+          "type": "string",
+          "maxLength": 4
+        },
+        "header": {
+          "type": "boolean"
+        },
+        "encoding": {
+          "type": "string"
+        },
+        "quote": {
+          "type": "string",
+          "maxLength": 1
+        },
+        "null_values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "root": {
+          "type": "string"
+        },
+        "explode": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "alias",
+              "path"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "alias": {
+                "$ref": "#/$defs/identifier"
+              },
+              "path": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "landing": {
+          "type": "string",
+          "enum": [
+            "external_table",
+            "stage",
+            "seed",
+            "view",
+            "native_read"
+          ]
+        },
+        "projection": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/projectionColumn"
+          }
+        },
+        "join": {
+          "type": "object",
+          "required": [
+            "type",
+            "condition"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "inner",
+                "left",
+                "right",
+                "full"
+              ]
+            },
+            "condition": {
+              "$ref": "#/$defs/sqlExpression"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "table"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "table"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "model"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "ref"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "delimited",
+                  "fixed_width",
+                  "json",
+                  "xml"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "projection",
+              "landing"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "delimited"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "delimiter"
+            ]
+          }
+        }
+      ]
+    },
+    "projectionColumn": {
+      "type": "object",
+      "required": [
+        "name",
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "After projection every source looks like a flat table. Column transforms never reference a path.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "type": {
+          "type": "string"
+        },
+        "from": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "description": "Delimited or fixed width: ordinal position or header name."
+        },
+        "path": {
+          "type": "string",
+          "description": "JSON path or XPath."
+        },
+        "as_text": {
+          "type": "boolean",
+          "default": false,
+          "description": "Required true for a decimal of more than 15 significant digits crossing a JSON hop."
+        }
+      }
+    },
+    "columnGroup": {
+      "type": "object",
+      "required": [
+        "group",
+        "transform"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "group": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "transform": {
+          "$ref": "#/$defs/temporalKeys"
+        }
+      }
+    },
+    "temporalKeys": {
+      "type": "object",
+      "required": [
+        "kind",
+        "instant",
+        "emit"
+      ],
+      "additionalProperties": false,
+      "description": "Resolves the zone once at load so cross-geography local-time analysis needs no query-time conversion.",
+      "properties": {
+        "kind": {
+          "const": "temporal_keys"
+        },
+        "instant": {
+          "$ref": "#/$defs/sqlExpression"
+        },
+        "zone": {
+          "$ref": "#/$defs/sqlExpression"
+        },
+        "business_date": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "zone": {
+              "$ref": "#/$defs/sqlExpression"
+            },
+            "cutover": {
+              "type": "string",
+              "pattern": "^\\d{2}:\\d{2}$"
+            }
+          }
+        },
+        "emit": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "utc_date_key",
+              "utc_time_key",
+              "local_date_key",
+              "local_time_key",
+              "utc_offset_minutes",
+              "business_date_key"
+            ]
+          }
+        }
+      }
+    },
+    "column": {
+      "type": "object",
+      "required": [
+        "name",
+        "type",
+        "transform"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "type": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "nullable": {
+          "type": "boolean",
+          "default": true
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "primary_key",
+            "foreign_key",
+            "natural_key",
+            "degenerate",
+            "measure",
+            "attribute"
+          ]
+        },
+        "references": {
+          "type": "object",
+          "required": [
+            "model",
+            "column"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "$ref": "#/$defs/identifier"
+            },
+            "column": {
+              "$ref": "#/$defs/identifier"
+            }
+          }
+        },
+        "allowed_values": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        },
+        "scd_behavior": {
+          "$ref": "#/$defs/scdBehavior"
+        },
+        "additivity": {
+          "type": "string",
+          "enum": [
+            "additive",
+            "semi_additive",
+            "non_additive"
+          ]
+        },
+        "transform": {
+          "$ref": "#/$defs/transform"
+        }
+      }
+    },
+    "transform": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "oneOf": [
+        {
+          "$ref": "#/$defs/tDirect"
+        },
+        {
+          "$ref": "#/$defs/tCast"
+        },
+        {
+          "$ref": "#/$defs/tExpression"
+        },
+        {
+          "$ref": "#/$defs/tConditional"
+        },
+        {
+          "$ref": "#/$defs/tLookup"
+        },
+        {
+          "$ref": "#/$defs/tAggregate"
+        },
+        {
+          "$ref": "#/$defs/tConstant"
+        },
+        {
+          "$ref": "#/$defs/tSurvived"
+        },
+        {
+          "$ref": "#/$defs/tUnresolved"
+        }
+      ]
+    },
+    "tDirect": {
+      "type": "object",
+      "required": [
+        "kind",
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "direct"
+        },
+        "source": {
+          "$ref": "#/$defs/sqlExpression"
+        }
+      }
+    },
+    "tCast": {
+      "type": "object",
+      "required": [
+        "kind",
+        "source",
+        "to"
+      ],
+      "additionalProperties": false,
+      "description": "Separated from expression because it generates without authored SQL, transpiles cleanly, and is checkable for precision loss.",
+      "properties": {
+        "kind": {
+          "const": "cast"
+        },
+        "source": {
+          "$ref": "#/$defs/sqlExpression"
+        },
+        "to": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string",
+          "description": "Parse mask. A mask with no fractional seconds under a millisecond target is a warning."
+        },
+        "from_zone": {
+          "$ref": "#/$defs/ianaZone"
+        },
+        "trim": {
+          "type": "boolean",
+          "default": false
+        },
+        "rounding": {
+          "type": "string",
+          "enum": [
+            "half_up",
+            "half_even",
+            "truncate"
+          ]
+        },
+        "on_error": {
+          "type": "string",
+          "enum": [
+            "null",
+            "error",
+            "sentinel"
+          ],
+          "default": "error"
+        },
+        "sentinel": {
+          "type": [
+            "string",
+            "number"
+          ]
+        }
+      }
+    },
+    "tExpression": {
+      "type": "object",
+      "required": [
+        "kind",
+        "sql"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "expression"
+        },
+        "sql": {
+          "$ref": "#/$defs/sqlExpression"
+        },
+        "dialect": {
+          "$ref": "#/$defs/platformName"
+        }
+      }
+    },
+    "tConditional": {
+      "type": "object",
+      "required": [
+        "kind",
+        "cases"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "conditional"
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "when",
+              "then"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "when": {
+                "$ref": "#/$defs/sqlExpression"
+              },
+              "then": {
+                "$ref": "#/$defs/sqlExpression"
+              }
+            }
+          }
+        },
+        "else": {
+          "$ref": "#/$defs/sqlExpression"
+        }
+      }
+    },
+    "tLookup": {
+      "type": "object",
+      "required": [
+        "kind",
+        "dimension",
+        "natural_key"
+      ],
+      "additionalProperties": false,
+      "description": "Point-in-time dimension lookup. Join mechanics come from the dimension's own scd block, never restated here.",
+      "properties": {
+        "kind": {
+          "const": "lookup"
+        },
+        "dimension": {
+          "$ref": "#/$defs/identifier"
+        },
+        "natural_key": {
+          "$ref": "#/$defs/keyExpressionList",
+          "description": "The fact-side key, one expression per column of the dimension's natural key. A bare string is one element. Matched positionally against the dimension's natural key; the lengths must agree."
+        },
+        "dimension_natural_key": {
+          "$ref": "#/$defs/keyExpressionList",
+          "description": "The dimension-side key columns, when the generator cannot resolve them from the dimension spec in this emit run. A bare string is one element. When both are available the validator checks they agree."
+        },
+        "source_system": {
+          "$ref": "#/$defs/sqlExpression"
+        },
+        "as_of": {
+          "$ref": "#/$defs/sqlExpression",
+          "description": "Omit to inherit target.as_of. Override only when this one lookup genuinely differs."
+        },
+        "emit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "surrogate": {
+              "$ref": "#/$defs/identifier"
+            },
+            "durable": {
+              "$ref": "#/$defs/identifier"
+            }
+          }
+        },
+        "on_null_key": {
+          "$ref": "#/$defs/memberRoute",
+          "default": "not_provided",
+          "description": "The source natural key arrived null. A source problem, distinct from a value that will not resolve."
+        },
+        "on_miss": {
+          "$ref": "#/$defs/memberRoute",
+          "default": "unknown",
+          "description": "The key is not in the dimension at all. Reference data problem."
+        },
+        "on_no_version": {
+          "$ref": "#/$defs/memberRoute",
+          "default": "no_version_at_date",
+          "description": "The key exists but no version covers the as-of instant. The entity is known; the question was asked at the wrong time."
+        }
+      }
+    },
+    "memberRoute": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "description": "A special member name from the registry, or the literals 'null' or 'error'. The validator checks the name against the registry."
+    },
+    "tAggregate": {
+      "type": "object",
+      "required": [
+        "kind",
+        "function",
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "aggregate"
+        },
+        "function": {
+          "type": "string",
+          "enum": [
+            "sum",
+            "min",
+            "max",
+            "avg",
+            "count",
+            "count_distinct"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/sqlExpression"
+        },
+        "group_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filter": {
+          "$ref": "#/$defs/sqlExpression"
+        }
+      }
+    },
+    "tConstant": {
+      "type": "object",
+      "required": [
+        "kind",
+        "value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "constant"
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "tSurvived": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "description": "Value resolved by the model's survivorship rules across multiple contributing sources.",
+      "properties": {
+        "kind": {
+          "const": "survived"
+        },
+        "candidates": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": [
+              "source",
+              "expression"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "expression": {
+                "$ref": "#/$defs/sqlExpression"
+              }
+            }
+          }
+        }
+      }
+    },
+    "tUnresolved": {
+      "type": "object",
+      "required": [
+        "kind",
+        "note"
+      ],
+      "additionalProperties": false,
+      "description": "First class. Emits a TODO, counts in the coverage report, renders red in review. The converter never guesses.",
+      "properties": {
+        "kind": {
+          "const": "unresolved"
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "raised_by": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        }
+      }
+    },
+    "keyType": {
+      "type": "string",
+      "enum": [
+        "smallint",
+        "int",
+        "bigint"
+      ]
+    },
+    "cardinality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entities"
+      ],
+      "properties": {
+        "entities": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "avg_versions": {
+          "type": "number",
+          "minimum": 1,
+          "default": 1
+        }
+      }
+    },
+    "hashPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Content hashing for change detection and existence. Never used for surrogate keys.",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": [
+            "md5",
+            "sha256"
+          ],
+          "default": "sha256"
+        },
+        "storage": {
+          "type": "string",
+          "enum": [
+            "hex"
+          ],
+          "default": "hex",
+          "description": "Hex, lower case. The hash lives only on dimension rows, never on a fact, so readability during a reconciliation beats width."
+        },
+        "hex_case": {
+          "type": "string",
+          "enum": [
+            "lower",
+            "upper"
+          ],
+          "default": "lower"
+        },
+        "strip_prefix": {
+          "type": "boolean",
+          "default": true,
+          "description": "Some platforms return 0x-prefixed hex. Strip it or cross-platform comparison never matches."
+        },
+        "framing": {
+          "type": "string",
+          "enum": [
+            "length_prefix",
+            "delimiter"
+          ],
+          "default": "length_prefix",
+          "description": "Without framing, ['AB','C'] and ['A','BC'] hash identically."
+        },
+        "delimiter": {
+          "type": "string"
+        },
+        "null_sentinel": {
+          "type": "string",
+          "default": "\u0000NULL"
+        },
+        "empty_sentinel": {
+          "type": "string",
+          "default": "\u0000EMPTY"
+        },
+        "numeric": {
+          "type": "string",
+          "enum": [
+            "cast_to_declared_scale"
+          ],
+          "default": "cast_to_declared_scale"
+        },
+        "timestamp_format": {
+          "type": "string",
+          "default": "YYYY-MM-DD HH24:MI:SS.FF3",
+          "description": "Explicit. Implicit rendering uses session settings, so one row hashes differently from two sessions."
+        },
+        "trim_text": {
+          "type": "boolean",
+          "default": true
+        },
+        "column_order": {
+          "type": "string",
+          "enum": [
+            "declared"
+          ],
+          "default": "declared"
+        }
+      }
+    },
+    "currentView": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Type 7 in practice. Join the base on the surrogate for as-was, this view on the durable key for as-is.",
+      "properties": {
+        "generate": {
+          "type": "boolean",
+          "default": true
+        },
+        "name": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "scdBehavior": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "track",
+            "overwrite"
+          ],
+          "description": "Legacy spelling. track is type 2, overwrite is type 1."
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "integer",
+              "enum": [
+                0,
+                1,
+                2,
+                3,
+                6
+              ]
+            },
+            "depth": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            },
+            "prior_columns": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              }
+            },
+            "change_date_column": {
+              "$ref": "#/$defs/identifier"
+            },
+            "current_access": {
+              "type": "string",
+              "enum": [
+                "view",
+                "materialized"
+              ],
+              "default": "view"
+            },
+            "current_column": {
+              "$ref": "#/$defs/identifier"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "paired_with": {
+              "$ref": "#/$defs/identifier",
+              "description": "Type 0 only. The live column this original value sits beside."
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": 3
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              "then": {
+                "required": [
+                  "depth",
+                  "prior_columns"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "type": {
+                    "const": 6
+                  },
+                  "current_access": {
+                    "const": "materialized"
+                  }
+                },
+                "required": [
+                  "type",
+                  "current_access"
+                ]
+              },
+              "then": {
+                "required": [
+                  "current_column"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "miniDimension": {
+      "type": "object",
+      "required": [
+        "name",
+        "columns"
+      ],
+      "additionalProperties": false,
+      "description": "Type 4. Rapid changers split out so they do not drive versioning of the base dimension.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "minItems": 1
+        },
+        "banding_required": {
+          "type": "boolean",
+          "default": true,
+          "description": "Continuous attributes must be banded or the mini-dimension's cardinality defeats its purpose."
+        },
+        "bands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "column",
+              "from"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "column": {
+                "$ref": "#/$defs/identifier"
+              },
+              "from": {
+                "type": "string"
+              },
+              "buckets": {
+                "type": "array",
+                "items": {
+                  "type": [
+                    "string",
+                    "number"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "outrigger": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Type 5. A Type 1 pointer on the base dimension to the current mini-dimension row.",
+          "properties": {
+            "current_key_column": {
+              "$ref": "#/$defs/identifier"
+            }
+          }
+        }
+      }
+    }
+  }
+}

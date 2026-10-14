@@ -1,0 +1,5 @@
+security_id|eff_date|ticker|issuer_name|sector_cd|credit_rating|par_value|maturity_dt|exchange_mic
+SEC001|2026-01-01|ACME|Acme Corporation|INDU|A|1000.0000|2030-06-30|XNYS
+SEC001|2026-04-15|ACME|Acme Corporation|INFT|A|1000.0000|2030-06-30|XNYS
+SEC001|2026-09-01|ACME|Acme Corporation|INFT|AA|1000.0000|2030-06-30|XNYS
+SEC002|2026-01-01|BETA|Beta Holdings Ltd|FIN|BBB|500.0000|2029-01-01|XNAS

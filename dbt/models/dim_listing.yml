@@ -1,0 +1,22 @@
+version: 2
+models:
+- name: dim_listing
+  description: 'A listing, identified by exchange plus ticker. Here to exercise a two-column natural key:
+    the same ticker on two exchanges is two listings, so neither column identifies a row alone. A fact
+    resolves it through its own column names, which differ from these.'
+  columns:
+  - name: exchange_code
+    tests:
+    - not_null:
+        config:
+          where: listing_key >= 0
+  - name: ticker
+    tests:
+    - not_null:
+        config:
+          where: listing_key >= 0
+  tests:
+  - dbt_utils.unique_combination_of_columns:
+      combination_of_columns:
+      - listing_durable_key
+      - valid_from

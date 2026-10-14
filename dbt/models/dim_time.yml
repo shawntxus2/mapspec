@@ -1,0 +1,11 @@
+version: 2
+models:
+- name: dim_time
+  description: 'Time of day at second grain, 86,400 rows. Deliberately time zone naive: it is a clock
+    reading, not an instant, which is what lets facts role-play it twice, once for UTC and once for local.
+    Milliseconds are not modeled here; they stay on the fact as part of the instant, for ordering and
+    duration. Location specific dayparts belong in a bridge, not on this dimension.'
+  tests:
+  - dbt_utils.unique_combination_of_columns:
+      combination_of_columns:
+      - time_key

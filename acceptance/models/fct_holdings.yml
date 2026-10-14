@@ -1,0 +1,103 @@
+spec_version: 1
+project:
+  name: acceptance
+  target_platform: duckdb
+
+target:
+  layer: fact
+  name: fct_holdings
+  schema: mart
+  description: >
+    Acceptance fixture. One point in time drives the dimension lookup, declared once on
+    the model. end_of_day means the version in force when the day closed, which is the
+    assertion that proves the boundary is half open.
+  grain: [holding_date, account_id, security_id]
+  as_of: "hld.holding_date"
+  as_of_promotion: end_of_day
+
+sources:
+  - alias: hld
+    kind: delimited
+    system: custody
+    transport: sftp
+    serialization: delimited
+    uri: "seeds/holdings.psv"
+    delimiter: "|"
+    header: true
+    source_zone: "UTC"
+    landing: native_read
+    projection:
+      - { name: holding_date,     from: 1, type: varchar(10) }
+      - { name: account_id,       from: 2, type: varchar(20) }
+      - { name: security_id,      from: 3, type: varchar(12) }
+      - { name: quantity_txt,     from: 4, type: varchar(30) }
+      - { name: market_value_txt, from: 5, type: varchar(30) }
+      - { name: ref_security_id,  from: 6, type: varchar(12) }
+
+columns:
+  - name: holding_date
+    type: date
+    nullable: false
+    role: primary_key
+    transform: { kind: cast, source: "hld.holding_date", to: date, format: "YYYY-MM-DD", on_error: error }
+
+  - name: account_id
+    type: varchar(20)
+    nullable: false
+    role: degenerate
+    transform: { kind: direct, source: "hld.account_id" }
+
+  - name: security_id
+    type: varchar(12)
+    nullable: false
+    role: degenerate
+    transform: { kind: direct, source: "hld.security_id" }
+
+  - name: security_key
+    type: int
+    nullable: false
+    role: foreign_key
+    references: { model: dim_security, column: security_key }
+    transform:
+      kind: lookup
+      dimension: dim_security
+      natural_key: "hld.security_id"
+      source_system: "'vendor_ref'"
+      emit: { surrogate: security_key, durable: security_durable_key }
+      on_null_key: not_provided
+      on_miss: error
+      on_no_version: no_version_at_date
+
+  - name: ref_security_key
+    type: int
+    nullable: false
+    role: foreign_key
+    references: { model: dim_security, column: security_key }
+    description: >
+      A second resolution of dim_security on a nullable key, carried so the on_null_key and
+      on_miss member arms are reached by data. security_key routes a miss to error and so
+      cannot carry one; a miss here routes to the unknown member and a null key to
+      not_provided. Without this, those case arms are output nothing runs.
+    transform:
+      kind: lookup
+      dimension: dim_security
+      natural_key: "hld.ref_security_id"
+      source_system: "'vendor_ref'"
+      emit: { surrogate: ref_security_key, durable: ref_security_durable_key }
+      on_null_key: not_provided
+      on_miss: unknown
+      on_no_version: no_version_at_date
+
+  - name: quantity
+    type: numeric(18,4)
+    nullable: false
+    role: measure
+    additivity: additive
+    transform: { kind: cast, source: "hld.quantity_txt", to: "numeric(18,4)", rounding: half_up, on_error: error }
+
+  - name: market_value
+    type: numeric(18,2)
+    nullable: false
+    role: measure
+    additivity: semi_additive
+    transform: { kind: cast, source: "hld.market_value_txt", to: "numeric(18,2)", rounding: half_up, on_error: error }
