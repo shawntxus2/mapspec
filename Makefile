@@ -8,7 +8,7 @@ PG_PORT  := 55432
 PG_IMAGE := postgres:16-alpine
 
 .PHONY: help setup validate emit graph accept accept-postgres parse-tier2 \
-        pg-up pg-down dbt check clean distclean
+        pg-up pg-down dbt check stale clean distclean
 
 help:
 	@echo "make setup     create the venv and install dbt, duckdb, sqlglot, psycopg2 (arm64 safe)"
@@ -64,6 +64,7 @@ accept-postgres:
 
 pg-up:
 	-@docker rm -f $(PG_NAME) >/dev/null 2>&1
+	# POSTGRES_PASSWORD: local test-container credential only, used inside the container; not a real secret.
 	-@docker run -d --name $(PG_NAME) -e POSTGRES_PASSWORD=mapspec -e POSTGRES_DB=mapspec \
 	   -p $(PG_PORT):5432 $(PG_IMAGE) >/dev/null 2>&1
 	-@for i in $$(seq 1 30); do docker exec $(PG_NAME) pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
@@ -75,9 +76,23 @@ pg-down:
 parse-tier2:
 	$(PY) acceptance/parse_tier2.py
 
-check: validate emit graph accept accept-postgres parse-tier2
+check: validate emit stale graph accept accept-postgres parse-tier2
 	@echo ""
 	@echo "all green"
+
+# The repo commits the generated dbt project (models, tests, landing, seeds, coverage.md)
+# so a visitor can read the SQL on GitHub without cloning. CLAUDE.md also says that SQL is
+# disposable: `emit` overwrites it from the specs, and nobody hand-edits it. Those two facts
+# stay consistent only if the committed output always equals what the current specs emit, so
+# the build re-emits and fails if the working tree moved. A diff here means someone changed a
+# spec or the emitter without re-running `make dbt` and committing dbt/.
+stale:
+	$(PY) emit.py --models acceptance/models --out dbt
+	cp acceptance/seeds/*.psv dbt/seeds/
+	@git diff --exit-code -- dbt/models dbt/seeds dbt/tests dbt/landing dbt/coverage.md \
+	  || { echo ""; \
+	       echo "ERROR: generated dbt output is stale. Run 'make dbt' and commit dbt/."; \
+	       exit 1; }
 
 # The dbt project is built from the acceptance specs, whose sources are real files.
 dbt:
