@@ -1,8 +1,12 @@
 # mapspec
 
-A declarative spec format and transpiler that turns a source-to-target mapping into dbt
+A declarative spec format and generator that turns a source-to-target mapping into dbt
 models, tests, and a coverage report, and proves the generated SQL by running it on two
 database engines and failing when they disagree.
+
+Why a spec rather than hand-written SQL: the mapping is reviewable by people who do not read
+SQL, and the invariants that make a Type 2 dimension correct get generated every time instead
+of remembered by whoever wrote the last one.
 
 ## What matters first
 
